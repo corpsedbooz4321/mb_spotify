@@ -272,7 +272,19 @@ namespace MusicBeePlugin
 
                     _trackMissing = 0;
                     _num = 0;
-                    _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle) + " + " + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
+
+                    string title = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle);
+                    string artist = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
+
+                    //_searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle) + " + " + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
+
+                    if (string.IsNullOrWhiteSpace(title) ||
+                        string.IsNullOrWhiteSpace(artist))
+                    {
+                        return;
+                    }
+
+                    _searchTerm = title + " + " + artist;
 
                     if (_auth == 1)
                     {
@@ -282,7 +294,6 @@ namespace MusicBeePlugin
 
                     panel.Invalidate();
                     break;
-
             }
         }
 
