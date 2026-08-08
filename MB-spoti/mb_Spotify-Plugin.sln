@@ -1,0 +1,43 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 16
+VisualStudioVersion = 16.0.31112.23
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "mb_Spotify-Plugin", "mb_Spotify-Plugin.csproj", "{EA4E342C-C766-4C68-A28B-7ADBE7C3667D}"
+	ProjectSection(ProjectDependencies) = postProject
+		{1C70690B-F28B-415D-BFF2-FCDD34CAD1F0} = {1C70690B-F28B-415D-BFF2-FCDD34CAD1F0}
+		{C222F9E6-9053-49E1-A1A0-F5A409159847} = {C222F9E6-9053-49E1-A1A0-F5A409159847}
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{86A2B1EE-465E-449F-ADD3-F8FD52FE7F11}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SpotifyAPI.Web", "SpotifyAPI.Web\SpotifyAPI.Web.csproj", "{C222F9E6-9053-49E1-A1A0-F5A409159847}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "SpotifyAPI.Web.Auth", "SpotifyAPI.Web.Auth\SpotifyAPI.Web.Auth.csproj", "{1C70690B-F28B-415D-BFF2-FCDD34CAD1F0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{EA4E342C-C766-4C68-A28B-7ADBE7C3667D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA4E342C-C766-4C68-A28B-7ADBE7C3667D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA4E342C-C766-4C68-A28B-7ADBE7C3667D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA4E342C-C766-4C68-A28B-7ADBE7C3667D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C222F9E6-9053-49E1-A1A0-F5A409159847}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C222F9E6-9053-49E1-A1A0-F5A409159847}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C222F9E6-9053-49E1-A1A0-F5A409159847}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C222F9E6-9053-49E1-A1A0-F5A409159847}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1C70690B-F28B-415D-BFF2-FCDD34CAD1F0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1C70690B-F28B-415D-BFF2-FCDD34CAD1F0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1C70690B-F28B-415D-BFF2-FCDD34CAD1F0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1C70690B-F28B-415D-BFF2-FCDD34CAD1F0}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {2222581B-11F2-4C19-AC21-6498C86C5764}
+	EndGlobalSection
+EndGlobal
