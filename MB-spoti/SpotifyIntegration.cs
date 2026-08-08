@@ -1,20 +1,18 @@
 ﻿using SpotifyAPI.Web;
+using System.Windows.Forms;
 using SpotifyAPI.Web.Auth;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using System.Xml.Serialization;
-using System.Xml;
 using System.Security.Cryptography;
+using Newtonsoft.Json; // Added for JSON serialization
 
 namespace MusicBeePlugin
 {
-
     public partial class Plugin
     {
-
         private static SpotifyClient _spotify;
         private static int _auth, _num, _trackMissing = 0;
         private static bool _trackLIB, _albumLIB, _artistLIB = false;
@@ -23,69 +21,39 @@ namespace MusicBeePlugin
 
         public void SerializeConfig(PKCETokenResponse data, string path, RSACryptoServiceProvider rsaKey)
         {
-            
             try
             {
-                // Serialize
+                if (data == null) return;
+
+                // Serialize directly to JSON
+                string json = JsonConvert.SerializeObject(data, Newtonsoft.Json.Formatting.Indented);
                 using (StreamWriter file = new StreamWriter(path, false))
                 {
-                    XmlSerializer controlsDefaultsSerializer = new XmlSerializer(typeof(PKCETokenResponse));
-                    controlsDefaultsSerializer.Serialize(file, data);
-                    file.Close();
+                    file.Write(json);
                 }
             }
             catch (Exception e)
             {
-                Console.WriteLine(e.Message);
+                System.Windows.Forms.MessageBox.Show("Error saving token file:\n" + e.Message, "Spotify Plugin Error");
             }
-            finally
-            {
-                // Encrypt
-                XmlDocument xmlDoc = new XmlDocument();
-                xmlDoc.PreserveWhitespace = true;
-                xmlDoc.Load(path);
-                Encrypt(xmlDoc, "AccessToken", "AccessToken", rsaKey, "rsaKey");
-                Encrypt(xmlDoc, "RefreshToken", "RefreshToken", _rsaKey, "rsaKey");
-                xmlDoc.Save(path);
-            }
-
         }
 
         public PKCETokenResponse DeserializeConfig(string path, RSACryptoServiceProvider rsaKey)
         {
-
             try
             {
-                // Decrypt
-                XmlDocument xmlDoc = new XmlDocument();
-                xmlDoc.PreserveWhitespace = true;
-                xmlDoc.Load(path);
-                Decrypt(xmlDoc, rsaKey, "rsaKey");
-                xmlDoc.Save(path);
-
-                // Deserialize
-                StreamReader file = new StreamReader(path);
-                XmlSerializer xSerial = new XmlSerializer(typeof(PKCETokenResponse));
-                object oData = xSerial.Deserialize(file);
-                var thisConfig = (PKCETokenResponse)oData;
-                file.Close();
-                return thisConfig;
+                if (File.Exists(path))
+                {
+                    // Read and deserialize JSON token
+                    string json = File.ReadAllText(path);
+                    return JsonConvert.DeserializeObject<PKCETokenResponse>(json);
+                }
             }
             catch (Exception e)
             {
-                Console.Write(e.Message);
-                return null;
+                System.Windows.Forms.MessageBox.Show("Error reading token file:\n" + e.Message, "Spotify Plugin Error");
             }
-            finally
-            {
-                // Encrypt
-                XmlDocument xmlDoc = new XmlDocument();
-                xmlDoc.PreserveWhitespace = true;
-                xmlDoc.Load(path);
-                Encrypt(xmlDoc, "AccessToken", "AccessToken", rsaKey, "rsaKey");
-                Encrypt(xmlDoc, "RefreshToken", "RefreshToken", rsaKey, "rsaKey");
-                xmlDoc.Save(path);
-            }
+            return null;
         }
 
         async void SpotifyWebAuth()
@@ -96,30 +64,38 @@ namespace MusicBeePlugin
                 {
                     var token_response = DeserializeConfig(_path, _rsaKey);
 
-                    var authenticator = new PKCEAuthenticator(_clientID, token_response, _path);
-
-                    var config = SpotifyClientConfig.CreateDefault()
-                        .WithAuthenticator(authenticator);
-                    _spotify = new SpotifyClient(config);
-
-                    SerializeConfig(token_response, _path, _rsaKey);
-
-
-                    // This appears to be the easiest way to check if the Spotify client works, but it's not great:
-                    try
+                    if (token_response != null)
                     {
-                        await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, "fasdofimasdofiasdnfaosnf"));
-                        _auth = 1;
-                    }
-                    catch (Exception e)
-                    {
-                        Console.WriteLine("Spotify agent dead: " + e);
-                        throw new System.NullReferenceException();
+                        var authenticator = new PKCEAuthenticator(_clientID, token_response, _path);
+
+                        var config = SpotifyClientConfig.CreateDefault()
+                            .WithAuthenticator(authenticator);
+                        _spotify = new SpotifyClient(config);
+
+                        // Verify token validity
+                        try
+                        {
+                            await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, "test"));
+                            _auth = 1;
+                            await TrackSearch();
+                            mbApiInterface.MB_RefreshPanels();
+                            panel.Invalidate();
+                            return; // Successfully authenticated from saved token!
+                        }
+                        catch (Exception)
+                        {
+                            // Token expired/invalid, will proceed to web auth below
+                        }
                     }
                 }
-                else { throw new System.NullReferenceException("Token.xml not found!"); }
             }
-            catch (System.NullReferenceException)
+            catch (Exception)
+            {
+                // Fallback to web auth if any startup checks fail
+            }
+
+            // Trigger Browser OAuth Flow
+            try
             {
                 var (verifier, challenge) = PKCEUtil.GenerateCodes(120);
 
@@ -142,17 +118,33 @@ namespace MusicBeePlugin
                         new PKCETokenRequest(_clientID, response.Code, server.BaseUri, verifier)
                     );
 
-                    //WriteOutput(initialResponse);
-
                     var authenticator = new PKCEAuthenticator(_clientID, initialResponse, _path);
 
                     var config = SpotifyClientConfig.CreateDefault()
                         .WithAuthenticator(authenticator);
                     _spotify = new SpotifyClient(config);
 
-                    //WriteOutput(initialResponse);
+                    // Save JSON token cleanly
                     SerializeConfig(initialResponse, _path, _rsaKey);
+                    _auth = 1;// Save JSON token cleanly
+
+                    await TrackSearch();                          // <-- added: populate track fields
+
+                    if (panel.InvokeRequired)                      // <-- added: marshal to UI thread
+                    {
+                        panel.Invoke((MethodInvoker)delegate
+                        {
+                            mbApiInterface.MB_RefreshPanels();
+                            panel.Invalidate();
+                        });
+                    }
+                    else
+                    {
+                        mbApiInterface.MB_RefreshPanels();
+                        panel.Invalidate();
+                    }
                 };
+
                 await server.Start();
 
                 try
@@ -163,24 +155,25 @@ namespace MusicBeePlugin
                 {
                     Console.WriteLine("Unable to open URL, manually open: {0}", uri);
                 }
-
-                _auth = 1;
             }
             catch (System.Net.WebException)
             {
                 _auth = 0;
+            }
+            catch (Exception ex)
+            {
+                _auth = 0;
+                Console.WriteLine("Auth error: " + ex.Message);
             }
             finally
             {
                 mbApiInterface.MB_RefreshPanels();
                 panel.Invalidate();
             }
-
         }
 
         public async Task<FullTrack> TrackSearch()
         {
-
             try
             {
                 var track = await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, _searchTerm));
@@ -233,7 +226,6 @@ namespace MusicBeePlugin
                 _trackMissing = 1;
                 return null;
             }
-
         }
 
         public void SaveTrack()
@@ -258,7 +250,6 @@ namespace MusicBeePlugin
             {
                 Console.WriteLine("Song not found!");
             }
-
         }
 
         public void SaveAlbum()
@@ -283,7 +274,6 @@ namespace MusicBeePlugin
             {
                 Console.WriteLine("Song not found!");
             }
-            
         }
 
         public void FollowArtist()
@@ -308,7 +298,6 @@ namespace MusicBeePlugin
             {
                 Console.WriteLine("Song not found!");
             }
-            
         }
 
         public void RemoveTrack()
@@ -333,7 +322,6 @@ namespace MusicBeePlugin
             {
                 Console.WriteLine("Song not found!");
             }
-            
         }
 
         public void RemoveAlbum()
@@ -358,7 +346,6 @@ namespace MusicBeePlugin
             {
                 Console.WriteLine("Song not found!");
             }
-            
         }
 
         public void UnfollowArtist()
@@ -383,7 +370,6 @@ namespace MusicBeePlugin
             {
                 Console.WriteLine("Song not found!");
             }
-            
         }
 
         public Boolean CheckTrack(string id)
@@ -405,7 +391,6 @@ namespace MusicBeePlugin
 
         public Boolean CheckAlbum(string id)
         {
-
             var albums = new LibraryCheckAlbumsRequest(new List<String> { id });
 
             List<bool> albumsSaved = _spotify.Library.CheckAlbums(albums).Result;
@@ -419,12 +404,10 @@ namespace MusicBeePlugin
                 _albumLIB = false;
                 return false;
             }
-
         }
 
         public Boolean CheckArtist(string id)
         {
-
             var artist = new FollowCheckCurrentUserRequest(FollowCheckCurrentUserRequest.Type.Artist, new List<string> { id });
 
             List<bool> artistFollowed = _spotify.Follow.CheckCurrentUser(artist).Result;
@@ -439,6 +422,5 @@ namespace MusicBeePlugin
                 return false;
             }
         }
-
     }
 }

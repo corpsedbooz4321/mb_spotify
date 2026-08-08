@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Threading.Tasks;
-using System.Xml.Serialization;
+using Newtonsoft.Json;
 using SpotifyAPI.Web.Http;
 
 namespace SpotifyAPI.Web
@@ -47,13 +47,12 @@ namespace SpotifyAPI.Web
 
     public void SerializeConfig(PKCETokenResponse data)
     {
+      string json = JsonConvert.SerializeObject(data, Newtonsoft.Json.Formatting.Indented);
+      using (StreamWriter file = new StreamWriter(Path, false))
+      {
+        file.Write(json);
+      }
 
-        using (StreamWriter file = new StreamWriter(Path, false))
-        {
-            XmlSerializer controlsDefaultsSerializer = new XmlSerializer(typeof(PKCETokenResponse));
-            controlsDefaultsSerializer.Serialize(file, data);
-            file.Close();
-        }
     }
 
     public async Task Apply(IRequest request, IAPIConnector apiConnector)

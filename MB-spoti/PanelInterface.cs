@@ -17,6 +17,7 @@ namespace MusicBeePlugin
         public int panelHeight;
         private static string _searchTerm, _path;
         private bool _runOnce = true;
+        private static bool _authInProgress = false; // guards against triggering SpotifyWebAuth() twice
         Font largeBold, smallRegular, smallBold;
         private RSACryptoServiceProvider _rsaKey;
         CspParameters _cspParams = new CspParameters();
@@ -31,7 +32,7 @@ namespace MusicBeePlugin
             about.Author = "zkhcohen";
             about.TargetApplication = "Spotify Plugin";
             about.Type = PluginType.PanelView;
-            about.VersionMajor = 3; 
+            about.VersionMajor = 3;
             about.VersionMinor = 1;
             about.Revision = 0;
             about.MinInterfaceVersion = MinInterfaceVersion;
@@ -48,7 +49,7 @@ namespace MusicBeePlugin
 
         public int OnDockablePanelCreated(Control panel)
         {
-            
+
             float dpiScaling = 0;
 
             largeBold = new Font(panel.Font.FontFamily, 9, FontStyle.Bold);
@@ -83,12 +84,12 @@ namespace MusicBeePlugin
 
                 return text = text + "...";
             }
-                
+
         }
 
         private void DrawPanel(object sender, PaintEventArgs e)
         {
-            
+
             var bg = panel.BackColor;
             var text1 = panel.ForeColor;
             var text2 = text1;
@@ -96,9 +97,12 @@ namespace MusicBeePlugin
             e.Graphics.Clear(bg);
             panel.Cursor = Cursors.Hand;
 
-            if(_runOnce)
+            if (_runOnce)
             {
-                SpotifyWebAuth();
+                if (!_authInProgress)
+                {
+                    SpotifyWebAuth();
+                }
                 _trackMissing = 1;
                 mbApiInterface.MB_RefreshPanels();
                 panel.Invalidate();
@@ -157,7 +161,7 @@ namespace MusicBeePlugin
             {
                 TextRenderer.DrawText(e.Graphics, "Please Click Here to \nAuthenticate Spotify.", new Font(panel.Font.FontFamily, 14), new Point(4, 50), text1);
             }
-            
+
         }
 
         public List<ToolStripItem> GetMenuItems()
@@ -175,7 +179,10 @@ namespace MusicBeePlugin
         public void reAuthSpotify(object sender, EventArgs e)
         {
             File.Delete(_path);
-            SpotifyWebAuth();
+            if (!_authInProgress)
+            {
+                SpotifyWebAuth();
+            }
             _trackMissing = 1;
             mbApiInterface.MB_RefreshPanels();
             panel.Invalidate();
@@ -188,8 +195,10 @@ namespace MusicBeePlugin
             MouseEventArgs me = (MouseEventArgs)e;
             if (_auth == 0 && me.Button == System.Windows.Forms.MouseButtons.Left)
             {
-
-                SpotifyWebAuth();
+                if (!_authInProgress)
+                {
+                    SpotifyWebAuth();
+                }
                 _trackMissing = 1;
 
                 panel.Invalidate();
@@ -250,12 +259,12 @@ namespace MusicBeePlugin
                 }
 
             }
-            
+
         }
 
         public async void ReceiveNotification(string sourceFileUrl, NotificationType type)
         {
-            
+
             switch (type)
             {
 
@@ -264,13 +273,13 @@ namespace MusicBeePlugin
                     _trackMissing = 0;
                     _num = 0;
                     _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle) + " + " + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
-                    
+
                     if (_auth == 1)
                     {
                         mbApiInterface.MB_RefreshPanels();
                         await TrackSearch();
                     }
-                    
+
                     panel.Invalidate();
                     break;
 
