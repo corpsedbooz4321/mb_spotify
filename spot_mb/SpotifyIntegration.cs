@@ -114,26 +114,20 @@ namespace MusicBeePlugin
 
                 server.PkceReceived += async (sender, response) =>
                 {
-                    MessageBox.Show("DEBUG 3: spotify callback received");
                     await server.Stop();
-                    MessageBox.Show("DEBUG 4: Oauth server stopped");
 
-                    MessageBox.Show("DEBUG 5: About request spotify token");
                     var initialResponse = await new OAuthClient().RequestToken(
                         new PKCETokenRequest(_clientID, response.Code, server.BaseUri, verifier)
                     );
 
-                    MessageBox.Show("DEBUG 6: spotify token recieved");
                     var authenticator = new PKCEAuthenticator(_clientID, initialResponse, _path);
 
                     var config = SpotifyClientConfig.CreateDefault()
                         .WithAuthenticator(authenticator);
                     _spotify = new SpotifyClient(config);
-                    MessageBox.Show("DEBUG 7: spotify client created");
 
                     // Save JSON token cleanly
                     SerializeConfig(initialResponse, _path, _rsaKey);
-                    MessageBox.Show("DEBUG 8: token saved!");
                     _auth = 1;// Save JSON token cleanly
 
                     _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
@@ -141,18 +135,7 @@ namespace MusicBeePlugin
                                 + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
                     try
                     {
-                        MessageBox.Show("DEBUG 9A: Entering TrackSearch");
                         await TrackSearch();
-                        MessageBox.Show(
-                            "TRACK DEBUG\n\n" +
-                            "_auth = " + _trackMissing + "\n" +
-                            "_searchTerm = " + _searchTerm + "\n" +
-                            "_title = " + _title + "\n" +
-                            "_artist = " + _artist + "\n" +
-                            "_album = " + _album
-                        );
-                        MessageBox.Show("DEBUG 8: Track search returned");
-                         
                     }
                     catch(Exception ex)
                     {
@@ -181,9 +164,7 @@ namespace MusicBeePlugin
                     }
                 };
 
-                MessageBox.Show("Debug 1: About to start OAuth server");
                 await server.Start();
-                MessageBox.Show("Debug 2: Auth OAuth server started");
 
                 try
                 {
@@ -212,8 +193,6 @@ namespace MusicBeePlugin
 
         public async Task<FullTrack> TrackSearch()
         {
-            MessageBox.Show("SEARCH DEBUG 1: About to call Spotify Search");
-
             try
             {
                 var track = await _spotify.Search.Item(
@@ -221,7 +200,6 @@ namespace MusicBeePlugin
                 );
 
                 MessageBox.Show(
-                    "SEARCH DEBUG 2: Search completed\n\n" +
                     "Results: " + track.Tracks.Items.Count
                 );
 
