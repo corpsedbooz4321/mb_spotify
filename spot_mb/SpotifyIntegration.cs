@@ -7,7 +7,9 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Security.Cryptography;
-using Newtonsoft.Json; // Added for JSON serialization
+using Newtonsoft.Json;
+using System.Linq.Expressions; // Added for JSON serialization
+
 
 namespace MusicBeePlugin
 {
@@ -112,23 +114,57 @@ namespace MusicBeePlugin
 
                 server.PkceReceived += async (sender, response) =>
                 {
+                    MessageBox.Show("DEBUG 3: spotify callback received");
                     await server.Stop();
+                    MessageBox.Show("DEBUG 4: Oauth server stopped");
 
+                    MessageBox.Show("DEBUG 5: About request spotify token");
                     var initialResponse = await new OAuthClient().RequestToken(
                         new PKCETokenRequest(_clientID, response.Code, server.BaseUri, verifier)
                     );
 
+                    MessageBox.Show("DEBUG 6: spotify token recieved");
                     var authenticator = new PKCEAuthenticator(_clientID, initialResponse, _path);
 
                     var config = SpotifyClientConfig.CreateDefault()
                         .WithAuthenticator(authenticator);
                     _spotify = new SpotifyClient(config);
+                    MessageBox.Show("DEBUG 7: spotify client created");
 
                     // Save JSON token cleanly
                     SerializeConfig(initialResponse, _path, _rsaKey);
+                    MessageBox.Show("DEBUG 8: token saved!");
                     _auth = 1;// Save JSON token cleanly
 
-                    await TrackSearch();                          // <-- added: populate track fields
+                    _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
+                                + " + "
+                                + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
+                    try
+                    {
+                        MessageBox.Show("DEBUG 9A: Entering TrackSearch");
+                        await TrackSearch();
+                        MessageBox.Show(
+                            "TRACK DEBUG\n\n" +
+                            "_auth = " + _trackMissing + "\n" +
+                            "_searchTerm = " + _searchTerm + "\n" +
+                            "_title = " + _title + "\n" +
+                            "_artist = " + _artist + "\n" +
+                            "_album = " + _album
+                        );
+                        MessageBox.Show("DEBUG 8: Track search returned");
+                         
+                    }
+                    catch(Exception ex)
+                    {
+                        MessageBox.Show(
+                            "DEBUG 9 ERROR:\n\n" +
+                            ex.GetType().FullName +
+                            "\n\n" +
+                            ex.Message +
+                            "\n\n" +
+                            ex.StackTrace
+                        );
+                    }
 
                     if (panel.InvokeRequired)                      // <-- added: marshal to UI thread
                     {
@@ -145,7 +181,9 @@ namespace MusicBeePlugin
                     }
                 };
 
+                MessageBox.Show("Debug 1: About to start OAuth server");
                 await server.Start();
+                MessageBox.Show("Debug 2: Auth OAuth server started");
 
                 try
                 {
@@ -174,60 +212,73 @@ namespace MusicBeePlugin
 
         public async Task<FullTrack> TrackSearch()
         {
+            MessageBox.Show("SEARCH DEBUG 1: About to call Spotify Search");
+
             try
             {
-                var track = await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, _searchTerm));
-                _title = Truncate(track.Tracks.Items[_num].Name, largeBold);
-                _artist = Truncate(string.Join(", ", from item in track.Tracks.Items[_num].Artists select item.Name), smallRegular);
-                _album = Truncate(track.Tracks.Items[_num].Album.Name, smallRegular);
+                var track = await _spotify.Search.Item(
+                    new SearchRequest(SearchRequest.Types.Track, _searchTerm)
+                );
+
+                MessageBox.Show(
+                    "SEARCH DEBUG 2: Search completed\n\n" +
+                    "Results: " + track.Tracks.Items.Count
+                );
+
+                _title = Truncate(
+                    track.Tracks.Items[_num].Name,
+                    largeBold
+                );
+
+                _artist = Truncate(
+                    string.Join(
+                        ", ",
+                     from item in track.Tracks.Items[_num].Artists
+                        select item.Name
+                    ),
+                    smallRegular
+                );
+
+                _album = Truncate(
+                   track.Tracks.Items[_num].Album.Name,
+                 smallRegular
+                );
+
                 _trackID = track.Tracks.Items[_num].Id;
                 _albumID = track.Tracks.Items[_num].Album.Id;
                 _artistID = track.Tracks.Items[_num].Artists[0].Id;
                 _imageURL = track.Tracks.Items[_num].Album.Images[0].Url;
+
                 _trackMissing = 0;
+
                 return null;
             }
-            catch (APIUnauthorizedException e)
+
+            catch (APIException ex)
             {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-                return null;
+                MessageBox.Show(
+                    "SPOTIFY API ERROR\n\n" +
+                    "Type: " + ex.GetType().FullName + "\n\n" +
+                    "Status: " + ex.Response?.StatusCode + "\n\n" +
+                    "Response:\n" + ex.Response + "\n\n" +
+                    "Message:\n" + ex.Message
+                );
+
+                throw;
             }
-            catch (APIException e)
+            catch (Exception ex)
             {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-                return null;
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-                _trackMissing = 1;
-                return null;
-            }
-            catch (System.NullReferenceException)
-            {
-                Console.WriteLine("Auth error!");
-                _auth = 0;
-                _trackMissing = 1;
-                return null;
-            }
-            catch (System.Net.WebException)
-            {
-                Console.WriteLine("Auth error!");
-                _auth = 0;
-                _trackMissing = 1;
-                return null;
-            }
-            catch (System.Net.Http.HttpRequestException)
-            {
-                Console.WriteLine("Auth error!");
-                _auth = 0;
-                _trackMissing = 1;
-                return null;
+                MessageBox.Show(
+                    "SEARCH ERROR\n\n" +
+                    "Type: " + ex.GetType().FullName +
+                    "\n\nMessage:\n" + ex.Message +
+                    "\n\nStack:\n" + ex.StackTrace
+                );
+
+                throw;
             }
         }
-
+            
         public void SaveTrack()
         {
             try
