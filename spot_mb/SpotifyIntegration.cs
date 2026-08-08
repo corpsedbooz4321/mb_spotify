@@ -193,6 +193,10 @@ namespace MusicBeePlugin
 
         public async Task<FullTrack> TrackSearch()
         {
+            if (string.IsNullOrWhiteSpace(_searchTerm))
+            {
+                return null;
+            }
             try
             {
                 var track = await _spotify.Search.Item(
