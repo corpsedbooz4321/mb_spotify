@@ -199,10 +199,6 @@ namespace MusicBeePlugin
                     new SearchRequest(SearchRequest.Types.Track, _searchTerm)
                 );
 
-                MessageBox.Show(
-                    "Results: " + track.Tracks.Items.Count
-                );
-
                 _title = Truncate(
                     track.Tracks.Items[_num].Name,
                     largeBold
