@@ -21,6 +21,35 @@ namespace MusicBeePlugin
         private static string _title, _album, _artist, _trackID, _albumID, _artistID, _imageURL;
         private static string _clientID = "05356b07a417487d9d8c6d0587de87a7";
 
+        private void RefreshPanelUi()
+        {
+            try
+            {
+                if (panel == null)
+                {
+                    return;
+                }
+
+                if (panel.InvokeRequired)
+                {
+                    panel.BeginInvoke((MethodInvoker)(() =>
+                    {
+                        mbApiInterface.MB_RefreshPanels();
+                        panel.Invalidate();
+                    }));
+                }
+                else
+                {
+                    mbApiInterface.MB_RefreshPanels();
+                    panel.Invalidate();
+                }
+            }
+            catch (Exception)
+            {
+                // Ignore UI refresh failures so the plugin can continue.
+            }
+        }
+
         public void SerializeConfig(PKCETokenResponse data, string path, RSACryptoServiceProvider rsaKey)
         {
             try
@@ -80,8 +109,7 @@ namespace MusicBeePlugin
                             await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, "test"));
                             _auth = 1;
                             await TrackSearch();
-                            mbApiInterface.MB_RefreshPanels();
-                            panel.Invalidate();
+                            RefreshPanelUi();
                             return; // Successfully authenticated from saved token!
                         }
                         catch (Exception)
@@ -132,7 +160,7 @@ namespace MusicBeePlugin
 
                     // Save JSON token cleanly
                     SerializeConfig(initialResponse, _path, _rsaKey);
-                    _auth = 1;// Save JSON token cleanly
+                    _auth = 1;
 
                     _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
                                 + " + "
@@ -143,29 +171,11 @@ namespace MusicBeePlugin
                     }
                     catch(Exception ex)
                     {
-                        MessageBox.Show(
-                            "DEBUG 9 ERROR:\n\n" +
-                            ex.GetType().FullName +
-                            "\n\n" +
-                            ex.Message +
-                            "\n\n" +
-                            ex.StackTrace
-                        );
+                        // Surface the issue in a non-blocking way and keep the UI responsive.
+                        Console.WriteLine("TrackSearch failed after auth: " + ex.Message);
                     }
 
-                    if (panel.InvokeRequired)                      // <-- added: marshal to UI thread
-                    {
-                        panel.Invoke((MethodInvoker)delegate
-                        {
-                            mbApiInterface.MB_RefreshPanels();
-                            panel.Invalidate();
-                        });
-                    }
-                    else
-                    {
-                        mbApiInterface.MB_RefreshPanels();
-                        panel.Invalidate();
-                    }
+                    RefreshPanelUi();
                 };
 
                 await server.Start();
@@ -199,13 +209,28 @@ namespace MusicBeePlugin
         {
             if (string.IsNullOrWhiteSpace(_searchTerm))
             {
+                _trackMissing = 1;
+                _auth = 1;
+                RefreshPanelUi();
                 return null;
             }
+
             try
             {
                 var track = await _spotify.Search.Item(
                     new SearchRequest(SearchRequest.Types.Track, _searchTerm)
                 );
+
+                if (track?.Tracks?.Items == null || track.Tracks.Items.Count == 0)
+                {
+                    _title = _artist = _album = null;
+                    _trackID = _albumID = _artistID = _imageURL = null;
+                    _trackMissing = 1;
+                    _trackLIB = _albumLIB = _artistLIB = false;
+                    _auth = 1;
+                    RefreshPanelUi();
+                    return null;
+                }
 
                 _title = Truncate(
                     track.Tracks.Items[_num].Name,
@@ -244,86 +269,70 @@ namespace MusicBeePlugin
                     new List<string> { _artistID }
                 );
 
-                MessageBox.Show("LIBRARY CHECK 1: Track");
-
                 var tracksSaved = await _spotify.Library.CheckTracks(tracks);
-
-                MessageBox.Show("LIBRARY CHECK 2: Track worked");
-
                 var albumsSaved = await _spotify.Library.CheckAlbums(albums);
-
-                MessageBox.Show("LIBRARY CHECK 3: Album worked");
-
                 var artistFollowed = await _spotify.Follow.CheckCurrentUser(artist);
-
-                MessageBox.Show("LIBRARY CHECK 4: Artist worked");
 
                 _trackLIB = tracksSaved[0];
                 _albumLIB = albumsSaved[0];
                 _artistLIB = artistFollowed[0];
                 
-
                 _trackMissing = 0;
-
+                _auth = 1;
+                RefreshPanelUi();
                 return null;
             }
-
-            catch (APIException ex)
+            catch (APIException)
             {
-                MessageBox.Show(
-                    "SPOTIFY API ERROR\n\n" +
-                    "Type: " + ex.GetType().FullName + "\n\n" +
-                    "Status: " + ex.Response?.StatusCode + "\n\n" +
-                    "Response:\n" + ex.Response + "\n\n" +
-                    "Message:\n" + ex.Message
-                );
-
-                throw;
+                _trackMissing = 1;
+                _trackLIB = _albumLIB = _artistLIB = false;
+                _auth = 1;
+                RefreshPanelUi();
+                return null;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                MessageBox.Show(
-                    "SEARCH ERROR\n\n" +
-                    "Type: " + ex.GetType().FullName +
-                    "\n\nMessage:\n" + ex.Message +
-                    "\n\nStack:\n" + ex.StackTrace
-                );
-
-                throw;
+                _trackMissing = 1;
+                _trackLIB = _albumLIB = _artistLIB = false;
+                _auth = 1;
+                RefreshPanelUi();
+                return null;
             }
         }
             
-        public void SaveTrack()
+        public async void SaveTrack()
         {
             try
             {
                 var track = new LibrarySaveTracksRequest(new List<string> { _trackID });
-                _spotify.Library.SaveTracks(track);
-                Console.WriteLine("Track Saved.");
+                await _spotify.Library.SaveTracks(track);
+                _trackLIB = true;
+                RefreshPanelUi();
             }
             catch (APIUnauthorizedException e)
             {
                 Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " +_artistLIB);
+                Console.WriteLine("Error Msg: " + e.Message);
             }
             catch (APIException e)
             {
                 Console.WriteLine("Error Status: " + e.Response);
                 Console.WriteLine("Error Msg: " + e.Message);
             }
-            catch (System.ArgumentOutOfRangeException e)
+            catch (System.ArgumentOutOfRangeException)
             {
                 Console.WriteLine("Song not found!");
             }
         }
 
-        public void SaveAlbum()
+        public async void SaveAlbum()
         {
             try
             {
                 var album = new LibrarySaveAlbumsRequest(new List<string> { _albumID });
-                _spotify.Library.SaveAlbums(album);
-                Console.WriteLine("Album Saved.");
+                await _spotify.Library.SaveAlbums(album);
+                _albumLIB = true;
+                RefreshPanelUi();
             }
             catch (APIUnauthorizedException e)
             {
@@ -335,19 +344,20 @@ namespace MusicBeePlugin
                 Console.WriteLine("Error Status: " + e.Response);
                 Console.WriteLine("Error Msg: " + e.Message);
             }
-            catch (System.ArgumentOutOfRangeException e)
+            catch (System.ArgumentOutOfRangeException)
             {
                 Console.WriteLine("Song not found!");
             }
         }
 
-        public void FollowArtist()
+        public async void FollowArtist()
         {
             try
             {
                 var artist = new FollowRequest(FollowRequest.Type.Artist, new List<string> { _artistID });
-                _spotify.Follow.Follow(artist);
-                Console.WriteLine("Artist Followed.");
+                await _spotify.Follow.Follow(artist);
+                _artistLIB = true;
+                RefreshPanelUi();
             }
             catch (APIUnauthorizedException e)
             {
@@ -359,19 +369,20 @@ namespace MusicBeePlugin
                 Console.WriteLine("Error Status: " + e.Response);
                 Console.WriteLine("Error Msg: " + e.Message);
             }
-            catch (System.ArgumentOutOfRangeException e)
+            catch (System.ArgumentOutOfRangeException)
             {
                 Console.WriteLine("Song not found!");
             }
         }
 
-        public void RemoveTrack()
+        public async void RemoveTrack()
         {
             try
             {
                 var track = new LibraryRemoveTracksRequest(new List<string> { _trackID });
-                _spotify.Library.RemoveTracks(track);
-                Console.WriteLine("Track Unsaved.");
+                await _spotify.Library.RemoveTracks(track);
+                _trackLIB = false;
+                RefreshPanelUi();
             }
             catch (APIUnauthorizedException e)
             {
@@ -383,19 +394,20 @@ namespace MusicBeePlugin
                 Console.WriteLine("Error Status: " + e.Response);
                 Console.WriteLine("Error Msg: " + e.Message);
             }
-            catch (System.ArgumentOutOfRangeException e)
+            catch (System.ArgumentOutOfRangeException)
             {
                 Console.WriteLine("Song not found!");
             }
         }
 
-        public void RemoveAlbum()
+        public async void RemoveAlbum()
         {
             try
             {
                 var album = new LibraryRemoveAlbumsRequest(new List<string> { _albumID });
-                _spotify.Library.RemoveAlbums(album);
-                Console.WriteLine("Album Unsaved.");
+                await _spotify.Library.RemoveAlbums(album);
+                _albumLIB = false;
+                RefreshPanelUi();
             }
             catch (APIUnauthorizedException e)
             {
@@ -407,19 +419,20 @@ namespace MusicBeePlugin
                 Console.WriteLine("Error Status: " + e.Response);
                 Console.WriteLine("Error Msg: " + e.Message);
             }
-            catch (System.ArgumentOutOfRangeException e)
+            catch (System.ArgumentOutOfRangeException)
             {
                 Console.WriteLine("Song not found!");
             }
         }
 
-        public void UnfollowArtist()
+        public async void UnfollowArtist()
         {
             try
             {
                 var artist = new UnfollowRequest(UnfollowRequest.Type.Artist, new List<string> { _artistID });
-                _spotify.Follow.Unfollow(artist);
-                Console.WriteLine("Artist Unfollowed.");
+                await _spotify.Follow.Unfollow(artist);
+                _artistLIB = false;
+                RefreshPanelUi();
             }
             catch (APIUnauthorizedException e)
             {
@@ -431,7 +444,7 @@ namespace MusicBeePlugin
                 Console.WriteLine("Error Status: " + e.Response);
                 Console.WriteLine("Error Msg: " + e.Message);
             }
-            catch (System.ArgumentOutOfRangeException e)
+            catch (System.ArgumentOutOfRangeException)
             {
                 Console.WriteLine("Song not found!");
             }

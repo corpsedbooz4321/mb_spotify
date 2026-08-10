@@ -66,11 +66,6 @@ namespace SpotifyAPI.Web.Http
       Ensure.ArgumentNotNull(request, nameof(request));
 
       var fullUri = new Uri(request.BaseAddress, request.Endpoint).ApplyParameters(request.Parameters);
-
-
-
-
-
       var requestMsg = new HttpRequestMessage(request.Method, fullUri);
       foreach (var header in request.Headers)
       {
