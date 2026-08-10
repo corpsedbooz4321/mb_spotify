@@ -162,6 +162,10 @@ namespace MusicBeePlugin
                     SerializeConfig(initialResponse, _path, _rsaKey);
                     _auth = 1;
 
+                    // Refresh the UI immediately after successful authentication
+                    mbApiInterface.MB_RefreshPanels();
+                    panel.Invalidate();
+
                     _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
                                 + " + "
                                 + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
