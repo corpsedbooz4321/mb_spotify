@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using SpotifyAPI.Web.Http;
 
@@ -47,22 +48,35 @@ namespace SpotifyAPI.Web
     /// <value></value>
     public AuthorizationCodeTokenResponse InitialToken { get; }
 
+    private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
+
     public async Task Apply(IRequest request, IAPIConnector apiConnector)
     {
       Ensure.ArgumentNotNull(request, nameof(request));
 
       if (InitialToken.IsExpired)
       {
-        var tokenRequest = new AuthorizationCodeRefreshRequest(ClientId, ClientSecret, InitialToken.RefreshToken);
-        var refreshedToken = await OAuthClient.RequestToken(tokenRequest, apiConnector).ConfigureAwait(false);
+        await _refreshLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+          if (InitialToken.IsExpired) ;
+          {
+            var tokenRequest = new AuthorizationCodeRefreshRequest(ClientId, ClientSecret, InitialToken.RefreshToken);
+            var refreshedToken = await OAuthClient.RequestToken(tokenRequest, apiConnector).ConfigureAwait(false);
 
-        InitialToken.AccessToken = refreshedToken.AccessToken;
-        InitialToken.CreatedAt = refreshedToken.CreatedAt;
-        InitialToken.ExpiresIn = refreshedToken.ExpiresIn;
-        InitialToken.Scope = refreshedToken.Scope;
-        InitialToken.TokenType = refreshedToken.TokenType;
+            InitialToken.AccessToken = refreshedToken.AccessToken;
+            InitialToken.CreatedAt = refreshedToken.CreatedAt;
+            InitialToken.ExpiresIn = refreshedToken.ExpiresIn;
+            InitialToken.Scope = refreshedToken.Scope;
+            InitialToken.TokenType = refreshedToken.TokenType;
 
-        TokenRefreshed?.Invoke(this, InitialToken);
+            TokenRefreshed?.Invoke(this, InitialToken);
+          }
+        }
+        finally
+        {
+          _refreshLock.Release();
+        }
       }
 
       request.Headers["Authorization"] = $"{InitialToken.TokenType} {InitialToken.AccessToken}";
