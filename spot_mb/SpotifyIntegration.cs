@@ -156,30 +156,33 @@ namespace MusicBeePlugin
 
                     var me = await _spotify.UserProfile.Current();
                     MessageBox.Show("Logged is as : " + me.DisplayName);
-                    
+
 
                     // Save JSON token cleanly
                     SerializeConfig(initialResponse, _path, _rsaKey);
                     _auth = 1;
 
-                    // Refresh the UI immediately after successful authentication
-                    mbApiInterface.MB_RefreshPanels();
-                    panel.Invalidate();
-
                     _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
                                 + " + "
                                 + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
-                    try
+                    // Refresh the UI immediately after successful authentication
+                    //mbApiInterface.MB_RefreshPanels();
+                    //panel.Invalidate();
+                    panel.BeginInvoke((Action)(async () =>
                     {
-                        await TrackSearch();
-                    }
-                    catch(Exception ex)
-                    {
-                        // Surface the issue in a non-blocking way and keep the UI responsive.
-                        Console.WriteLine("TrackSearch failed after auth: " + ex.Message);
-                    }
+                        MessageBox.Show("Logeed in as : " + me.DisplayName);
+                        mbApiInterface.MB_RefreshPanels();
+                        panel.Invalidate();
 
-                    RefreshPanelUi();
+                        try
+                        {
+                            await TrackSearch();
+                        }
+                        catch (APIException ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"Search error: {ex.Message}");
+                        }
+                    }));
                 };
 
                 await server.Start();
@@ -245,7 +248,7 @@ namespace MusicBeePlugin
                     string.Join(
                         ", ",
                      from item in track.Tracks.Items[_num].Artists
-                        select item.Name
+                     select item.Name
                     ),
                     smallRegular
                 );
@@ -261,13 +264,13 @@ namespace MusicBeePlugin
                 _imageURL = track.Tracks.Items[_num].Album.Images[0].Url;
 
                 var tracks = new LibraryCheckTracksRequest(
-                    new List<string> {_trackID}
+                    new List<string> { _trackID }
                 );
 
                 var albums = new LibraryCheckAlbumsRequest(
                     new List<string> { _albumID }
                 );
-                
+
                 var artist = new FollowCheckCurrentUserRequest(
                     FollowCheckCurrentUserRequest.Type.Artist,
                     new List<string> { _artistID }
@@ -280,7 +283,7 @@ namespace MusicBeePlugin
                 _trackLIB = tracksSaved[0];
                 _albumLIB = albumsSaved[0];
                 _artistLIB = artistFollowed[0];
-                
+
                 _trackMissing = 0;
                 _auth = 1;
                 RefreshPanelUi();
@@ -303,7 +306,7 @@ namespace MusicBeePlugin
                 return null;
             }
         }
-            
+
         public async void SaveTrack()
         {
             try
@@ -459,7 +462,7 @@ namespace MusicBeePlugin
             MessageBox.Show("CHECK TRACK: " + id);
 
             var tracks = new LibraryCheckTracksRequest(
-                new List<String> {"spotify:track:" + id }
+                new List<String> { "spotify:track:" + id }
                 );
 
             try

@@ -71,4 +71,17 @@
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <Target Name="CopyPluginToMusicBee" AfterTargets="Build">
+    <ItemGroup>
+      <PluginFiles Include="$(TargetDir)mb_Spotify-Plugin.dll" />
+      <PluginFiles Include="$(TargetDir)SpotifyAPI.Web.dll" />
+      <PluginFiles Include="$(TargetDir)SpotifyAPI.Web.Auth.dll" />
+      <PluginFiles Include="$(TargetDir)EmbedIO.dll" />
+      <PluginFiles Include="$(TargetDir)Swan.Lite.dll" />
+      <PluginFiles Include="$(TargetDir)Newtonsoft.Json.dll" />
+    </ItemGroup>
+    <Message Text="Copying core plugin files to Portable MusicBee Plugins directory..." Importance="high" />
+    <Copy SourceFiles="@(PluginFiles)" DestinationFolder="C:\Users\mahia\Desktop\MusicBee\Plugins" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
