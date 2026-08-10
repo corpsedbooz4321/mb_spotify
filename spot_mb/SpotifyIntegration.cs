@@ -403,9 +403,14 @@ namespace MusicBeePlugin
 
         public Boolean CheckTrack(string id)
         {
-            var tracks = new LibraryCheckTracksRequest(new List<String> { id });
+            MessageBox.Show("CHECK TRACK CALLED\nID = " + id);
+
+            var tracks = new LibraryCheckTracksRequest(
+                new List<String> { id }
+                );
 
             List<bool> tracksSaved = _spotify.Library.CheckTracks(tracks).Result;
+            MessageBox.Show("CHECK TRACK RETURNED\nSaved = " + tracksSaved.ElementAt(0));
             if (tracksSaved.ElementAt(0))
             {
                 _trackLIB = true;
