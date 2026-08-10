@@ -126,6 +126,10 @@ namespace MusicBeePlugin
                         .WithAuthenticator(authenticator);
                     _spotify = new SpotifyClient(config);
 
+                    var me = await _spotify.UserProfile.Current();
+                    MessageBox.Show("Logged is as : " + me.DisplayName);
+                    
+
                     // Save JSON token cleanly
                     SerializeConfig(initialResponse, _path, _rsaKey);
                     _auth = 1;// Save JSON token cleanly
@@ -240,9 +244,19 @@ namespace MusicBeePlugin
                     new List<string> { _artistID }
                 );
 
+                MessageBox.Show("LIBRARY CHECK 1: Track");
+
                 var tracksSaved = await _spotify.Library.CheckTracks(tracks);
+
+                MessageBox.Show("LIBRARY CHECK 2: Track worked");
+
                 var albumsSaved = await _spotify.Library.CheckAlbums(albums);
+
+                MessageBox.Show("LIBRARY CHECK 3: Album worked");
+
                 var artistFollowed = await _spotify.Follow.CheckCurrentUser(artist);
+
+                MessageBox.Show("LIBRARY CHECK 4: Artist worked");
 
                 _trackLIB = tracksSaved[0];
                 _albumLIB = albumsSaved[0];
@@ -290,7 +304,7 @@ namespace MusicBeePlugin
             catch (APIUnauthorizedException e)
             {
                 Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
+                Console.WriteLine("Error Msg: " +_artistLIB);
             }
             catch (APIException e)
             {
@@ -425,22 +439,34 @@ namespace MusicBeePlugin
 
         public Boolean CheckTrack(string id)
         {
-            MessageBox.Show("CHECK TRACK CALLED\nID = " + id);
+            MessageBox.Show("CHECK TRACK: " + id);
 
             var tracks = new LibraryCheckTracksRequest(
-                new List<String> { id }
+                new List<String> {"spotify:track:" + id }
                 );
 
-            List<bool> tracksSaved = _spotify.Library.CheckTracks(tracks).Result;
-            MessageBox.Show("CHECK TRACK RETURNED\nSaved = " + tracksSaved.ElementAt(0)); if (tracksSaved.ElementAt(0))
+            try
             {
-                _trackLIB = true;
-                return true;
+                var result = _spotify.Library.CheckTracks(tracks).Result;
+
+                MessageBox.Show(
+                    "CHECK TRACK RESULT\n\n" +
+                    "Count: " + result.Count + "\n" +
+                    "Saved: " + result[0]
+                );
+
+                _trackLIB = result[0];
+                return result[0];
             }
-            else
+            catch (Exception ex)
             {
-                _trackLIB = false;
-                return false;
+                MessageBox.Show(
+                    "CHECK TRACK ERROR\n\n" +
+                    ex.GetType().FullName + "\n\n" +
+                    ex.Message
+                );
+
+                throw;
             }
         }
 

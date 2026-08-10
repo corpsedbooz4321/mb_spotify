@@ -7,22 +7,22 @@ namespace SpotifyAPI.Web
     /// <summary>
     ///
     /// </summary>
-    /// <param name="ids">
-    /// A comma-separated list of the Spotify IDs for the tracks. Maximum: 50 IDs.
+    /// <param name="uris">
+    /// A comma-separated list of the Spotify uris for the tracks. Maximum: 50 uris.
     /// </param>
-    public LibraryCheckTracksRequest(IList<string> ids)
+    public LibraryCheckTracksRequest(IList<string> uris)
     {
-      Ensure.ArgumentNotNull(ids, nameof(ids));
+      Ensure.ArgumentNotNull(uris, nameof(uris));
 
-      Ids = ids;
+      Uris = uris;
     }
 
     /// <summary>
-    /// A comma-separated list of the Spotify IDs for the tracks. Maximum: 50 IDs.
+    /// A comma-separated list of the Spotify uris for the tracks. Maximum: 50 uris.
     /// </summary>
     /// <value></value>
-    [QueryParam("ids")]
-    public IList<string> Ids { get; }
+    [QueryParam("uris")]
+    public IList<string> Uris { get; }
   }
 }
 

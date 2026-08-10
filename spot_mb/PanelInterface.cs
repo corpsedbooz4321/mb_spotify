@@ -124,7 +124,7 @@ namespace MusicBeePlugin
                 webClient.Dispose();
 
 
-                if (CheckTrack(_trackID))
+                if (_trackLIB)
                 {
                     TextRenderer.DrawText(e.Graphics, "Track Saved in Library", smallBold, new Point(80, 85), text1);
                 }
@@ -133,7 +133,7 @@ namespace MusicBeePlugin
                     TextRenderer.DrawText(e.Graphics, "Track Not in Library", smallRegular, new Point(80, 85), text1);
                 }
 
-                if (CheckAlbum(_albumID))
+                if (_albumLIB)
                 {
                     TextRenderer.DrawText(e.Graphics, "Album Saved in Library", smallBold, new Point(80, 105), text1);
                 }
@@ -142,7 +142,7 @@ namespace MusicBeePlugin
                     TextRenderer.DrawText(e.Graphics, "Album Not in Library", smallRegular, new Point(80, 105), text1);
                 }
 
-                if (CheckArtist(_artistID))
+                if (_artistLIB)
                 {
                     TextRenderer.DrawText(e.Graphics, "Artist Already Followed", smallBold, new Point(80, 125), text1);
                 }

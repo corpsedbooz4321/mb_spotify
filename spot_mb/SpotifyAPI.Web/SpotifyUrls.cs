@@ -117,7 +117,7 @@ namespace SpotifyAPI.Web
 
     public static Uri LibraryAlbums() => EUri($"me/albums");
 
-    public static Uri LibraryTracksContains() => EUri($"me/tracks/contains");
+    public static Uri LibraryTracksContains() => EUri($"me/Library/contains");
 
     public static Uri LibraryTracks() => EUri($"me/tracks");
 
