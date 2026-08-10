@@ -147,9 +147,13 @@ namespace MusicBeePlugin
                     CodeChallenge = challenge,
                     Scope = new[] { Scopes.UserLibraryModify, Scopes.UserFollowModify, Scopes.UserFollowRead, Scopes.UserLibraryRead }
                 };
+                MessageBox.Show("gonna make login request...");
                 var uri = loginRequest.ToUri();
 
                 var server = new EmbedIOAuthServer(new Uri("http://127.0.0.1:5000/callback"), 5000);
+                MessageBox.Show("gonna make login request...");
+
+                await server.Start(); // to start the server so it can listen to the callback.//
 
                 server.PkceReceived += async (sender, response) =>
                 {
@@ -168,7 +172,6 @@ namespace MusicBeePlugin
                         _spotify = new SpotifyClient(config);
 
                         var me = await _spotify.UserProfile.Current();
-                        MessageBox.Show("Logged in as : " + me.DisplayName);
 
                         // Save JSON token cleanly
                         SerializeConfig(initialResponse, _path, _rsaKey);
@@ -183,6 +186,8 @@ namespace MusicBeePlugin
                             _authInProgress = false;
                             mbApiInterface.MB_RefreshPanels();
                             panel.Invalidate();
+                            MessageBox.Show("Logged in as : " + me.DisplayName); //added here so it displays after the main panel interface updates so the main context hide behind the 
+                            //user info using me.Displayname
 
                             try
                             {
@@ -198,6 +203,12 @@ namespace MusicBeePlugin
                     {
                         _authInProgress = false;
                         System.Diagnostics.Debug.WriteLine($"OAuth callback failed: {ex.Message}");
+
+                        //making the faiure being displayed and unlockk the paned instead of failing silently
+                        panel.BeginInvoke((Action)(() =>
+                        panel.Invalidate();
+                        MessageBox.Show("Spotify authentication failed:\n" + ex.Message, "Spotify Plugin Error");
+                        ));
                     }
                 };
 
