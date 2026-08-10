@@ -103,9 +103,6 @@ namespace MusicBeePlugin
                 {
                     SpotifyWebAuth();
                 }
-                _trackMissing = 1;
-                mbApiInterface.MB_RefreshPanels();
-                panel.Invalidate();
                 _runOnce = false;
             }
 
@@ -183,7 +180,7 @@ namespace MusicBeePlugin
             {
                 SpotifyWebAuth();
             }
-            _trackMissing = 1;
+
             mbApiInterface.MB_RefreshPanels();
             panel.Invalidate();
         }

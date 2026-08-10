@@ -1,4 +1,4 @@
-﻿using SpotifyAPI.Web;
+using SpotifyAPI.Web;
 using System.Windows.Forms;
 using SpotifyAPI.Web.Auth;
 using System;
@@ -89,12 +89,14 @@ namespace MusicBeePlugin
 
         async void SpotifyWebAuth()
         {
+            if (_authInProgress) return;
+            _authInProgress = true;
+
             try
             {
                 if (File.Exists(_path))
                 {
                     var token_response = DeserializeConfig(_path, _rsaKey);
-
                     if (token_response != null)
                     {
                         var authenticator = new PKCEAuthenticator(_clientID, token_response, _path);
@@ -109,7 +111,6 @@ namespace MusicBeePlugin
                             await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, "test"));
                             _auth = 1;
                             await TrackSearch();
-                            RefreshPanelUi();
                             return; // Successfully authenticated from saved token!
                         }
                         catch (Exception)
@@ -123,8 +124,18 @@ namespace MusicBeePlugin
             {
                 // Fallback to web auth if any startup checks fail
             }
+            finally
+            {
+                if (_auth == 1)
+                {
+                    _authInProgress = false;
+                    RefreshPanelUi();
+                }
+            }
 
-            // Trigger Browser OAuth Flow
+            if (_auth == 1) return;
+            //BrowserUtil OAuth flow
+            bool browserOpened = false;
             try
             {
                 var (verifier, challenge) = PKCEUtil.GenerateCodes(120);
@@ -144,52 +155,56 @@ namespace MusicBeePlugin
                 {
                     await server.Stop();
 
-                    var initialResponse = await new OAuthClient().RequestToken(
-                        new PKCETokenRequest(_clientID, response.Code, server.BaseUri, verifier)
-                    );
-
-                    var authenticator = new PKCEAuthenticator(_clientID, initialResponse, _path);
-
-                    var config = SpotifyClientConfig.CreateDefault()
-                        .WithAuthenticator(authenticator);
-                    _spotify = new SpotifyClient(config);
-
-                    var me = await _spotify.UserProfile.Current();
-                    MessageBox.Show("Logged is as : " + me.DisplayName);
-
-
-                    // Save JSON token cleanly
-                    SerializeConfig(initialResponse, _path, _rsaKey);
-                    _auth = 1;
-
-                    _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
-                                + " + "
-                                + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
-                    // Refresh the UI immediately after successful authentication
-                    //mbApiInterface.MB_RefreshPanels();
-                    //panel.Invalidate();
-                    panel.BeginInvoke((Action)(async () =>
+                    try
                     {
-                        MessageBox.Show("Logeed in as : " + me.DisplayName);
-                        mbApiInterface.MB_RefreshPanels();
-                        panel.Invalidate();
+                        var initialResponse = await new OAuthClient().RequestToken(
+                            new PKCETokenRequest(_clientID, response.Code, server.BaseUri, verifier)
+                        );
 
-                        try
+                        var authenticator = new PKCEAuthenticator(_clientID, initialResponse, _path);
+
+                        var config = SpotifyClientConfig.CreateDefault()
+                            .WithAuthenticator(authenticator);
+                        _spotify = new SpotifyClient(config);
+
+                        var me = await _spotify.UserProfile.Current();
+                        MessageBox.Show("Logged in as : " + me.DisplayName);
+
+                        // Save JSON token cleanly
+                        SerializeConfig(initialResponse, _path, _rsaKey);
+                        _auth = 1;
+
+                        _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
+                                    + " + "
+                                    + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
+
+                        panel.BeginInvoke((Action)(async () =>
                         {
-                            await TrackSearch();
-                        }
-                        catch (APIException ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"Search error: {ex.Message}");
-                        }
-                    }));
+                            _authInProgress = false;
+                            mbApiInterface.MB_RefreshPanels();
+                            panel.Invalidate();
+
+                            try
+                            {
+                                await TrackSearch();
+                            }
+                            catch (APIException ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"Search error: {ex.Message}");
+                            }
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        _authInProgress = false;
+                        System.Diagnostics.Debug.WriteLine($"OAuth callback failed: {ex.Message}");
+                    }
                 };
-
-                await server.Start();
 
                 try
                 {
                     BrowserUtil.Open(uri);
+                    browserOpened = true;
                 }
                 catch (Exception)
                 {
@@ -203,10 +218,16 @@ namespace MusicBeePlugin
             catch (Exception ex)
             {
                 _auth = 0;
+                _authInProgress = false;
                 Console.WriteLine("Auth error: " + ex.Message);
+                mbApiInterface.MB_RefreshPanels();
+                panel.Invalidate();
+                return;
             }
-            finally
+            if (!browserOpened)
             {
+                //browserOpened never launched, nothing pending - CloseReason the flag
+                _authInProgress = false;
                 mbApiInterface.MB_RefreshPanels();
                 panel.Invalidate();
             }
