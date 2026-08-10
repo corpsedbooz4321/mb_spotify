@@ -212,14 +212,21 @@ namespace SpotifyAPI.Web.Http
           return newResponse;
         }).ConfigureAwait(false);
       }
-
-      System.IO.File.AppendAllText(
-          @"C:\mb_spotify_debug.txt",
+      try
+      {
+        System.IO.File.AppendAllText(
+          System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "mb_spotify_debug.txt"),
           $"Status: {response.StatusCode}\r\n" +
           $"Body: {response.Body}\r\n" +
           $"Time: {DateTime.Now}\r\n\r\n"
-      );     
+        );
+      }
+      catch
+      {
 
+      }
       ProcessErrors(response);
       return response;
     }

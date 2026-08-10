@@ -178,7 +178,7 @@ namespace MusicBeePlugin
                         _auth = 1;
 
                         _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
-                                    + " + "
+                                    + " "
                                     + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
 
                         panel.BeginInvoke((Action)(async () =>
@@ -206,9 +206,10 @@ namespace MusicBeePlugin
 
                         //making the faiure being displayed and unlockk the paned instead of failing silently
                         panel.BeginInvoke((Action)(() =>
-                        panel.Invalidate();
-                        MessageBox.Show("Spotify authentication failed:\n" + ex.Message, "Spotify Plugin Error");
-                        ));
+                        {
+                            panel.Invalidate();
+                            MessageBox.Show("Spotify authentication failed:\n" + ex.Message, "Spotify Plugin Error");
+                        }));
                     }
                 };
 
