@@ -227,6 +227,28 @@ namespace MusicBeePlugin
                 _artistID = track.Tracks.Items[_num].Artists[0].Id;
                 _imageURL = track.Tracks.Items[_num].Album.Images[0].Url;
 
+                var tracks = new LibraryCheckTracksRequest(
+                    new List<string> {_trackID}
+                );
+
+                var albums = new LibraryCheckAlbumsRequest(
+                    new List<string> { _albumID }
+                );
+                
+                var artist = new FollowCheckCurrentUserRequest(
+                    FollowCheckCurrentUserRequest.Type.Artist,
+                    new List<string> { _artistID }
+                );
+
+                var tracksSaved = await _spotify.Library.CheckTracks(tracks);
+                var albumsSaved = await _spotify.Library.CheckAlbums(albums);
+                var artistFollowed = await _spotify.Follow.CheckCurrentUser(artist);
+
+                _trackLIB = tracksSaved[0];
+                _albumLIB = albumsSaved[0];
+                _artistLIB = artistFollowed[0];
+                
+
                 _trackMissing = 0;
 
                 return null;
@@ -410,8 +432,7 @@ namespace MusicBeePlugin
                 );
 
             List<bool> tracksSaved = _spotify.Library.CheckTracks(tracks).Result;
-            MessageBox.Show("CHECK TRACK RETURNED\nSaved = " + tracksSaved.ElementAt(0));
-            if (tracksSaved.ElementAt(0))
+            MessageBox.Show("CHECK TRACK RETURNED\nSaved = " + tracksSaved.ElementAt(0)); if (tracksSaved.ElementAt(0))
             {
                 _trackLIB = true;
                 return true;
