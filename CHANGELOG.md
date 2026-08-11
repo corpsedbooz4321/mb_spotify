@@ -1,11 +1,12 @@
 
 # CHANGELOG
-
 All notable changes to `mb_Spotify-Plugin` are documented here.
 
-This project is a continuation of the original `mb_Spotify-Plugin` by **Zachary Cohen (`zkhcohen`)**, whose repository was archived in November 2022. Original historical releases are preserved below the current development history.
+### August 11, 2026 — MIT Licensing
 
----
+- Received permission from original author Zachary Cohen (`zkhcohen`) to continue development and distribute the project under the MIT License.
+- Preserved the original author's attribution and project history.
+- Added the MIT License to the maintained project.
 
 ## 2026 — Aditya Mahi / Current Maintenance
 

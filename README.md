@@ -297,9 +297,14 @@ The current development builds upon the original project while preserving the or
 
 ## License
 
-Refer to the repository's license files and original project documentation for licensing information.
+This project is licensed under the [MIT License](LICENSE).
 
----
+The original project was created by **Zachary Cohen (`zkhcohen`)**.  
+Development and maintenance resumed in 2026 under **Aditya Mahi**.
+The original author's work and attribution are preserved in the project history.
+Permission to continue development and distribute the project under the MIT License was granted by the original author.
+
+Refer to the repository's license files and original project documentation for licensing information.
 
 **Original project:** Zachary Cohen / `zkhcohen`
 **Current maintainer:** Aditya Mahi
