@@ -6,13 +6,16 @@ using System.Runtime.InteropServices;
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("mb_Spotify_Plugin")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyDescription("Spotify integration plugin for MusicBee")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("zkhcohen")]
+[assembly: AssemblyCompany("corpsedbooz4321")]
+[assembly: AssemblyCopyright("Original author: zkhcohen (2021);Maintainer: Aditya Mahi")]
 [assembly: AssemblyProduct("mb_Spotify_Plugin")]
-[assembly: AssemblyCopyright("Copyright © 2021")]
+[assembly: AssemblyCopyright("Copyright © 2026 corpsedbooz4321")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
+[assembly: AssemblyCompany("Aditya Mahi")]
+[assembly: AssemblyProduct("mb_Spotify_Plugin")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
