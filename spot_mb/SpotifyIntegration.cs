@@ -271,25 +271,20 @@ namespace MusicBeePlugin
                     RefreshPanelUi();
                     return null;
                 }
+                //clampimg _num to a valid index insteadof trusting stale state
 
-                _title = Truncate(
-                    track.Tracks.Items[_num].Name,
-                    largeBold
-                );
+                if (_num < 0 || _num >= track.Tracks.Items.Count)
+                {
+                    _num = 0;
+                }
 
-                _artist = Truncate(
-                    string.Join(
-                        ", ",
-                     from item in track.Tracks.Items[_num].Artists
-                     select item.Name
-                    ),
-                    smallRegular
-                );
+                var item = track.Tracks.Items[_num];
+                _title = Truncate(item.Name, largeBold);
 
-                _album = Truncate(
-                   track.Tracks.Items[_num].Album.Name,
-                 smallRegular
-                );
+                _artist = Truncate(string.Join(", ", from a in item.Artists select a.Name), smallRegular);
+
+                _album = Truncate(item.Album.Name, smallRegular);
+
 
                 _trackID = track.Tracks.Items[_num].Id;
                 _albumID = track.Tracks.Items[_num].Album.Id;
