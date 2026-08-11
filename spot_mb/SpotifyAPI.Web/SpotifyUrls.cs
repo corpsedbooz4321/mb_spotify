@@ -12,6 +12,8 @@ namespace SpotifyAPI.Web
     public static readonly Uri OAuthToken = new("https://accounts.spotify.com/api/token");
 
     public static Uri Me() => EUri($"me");
+    public static Uri Library() => EUri($"me/library");
+    public static Uri LibraryContains() => EUri($"me/library/contains");
 
     public static Uri User(string userId) => EUri($"users/{userId}");
 
