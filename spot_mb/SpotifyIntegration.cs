@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Security.Cryptography;
 using Newtonsoft.Json;
 using System.Linq.Expressions; // Added for JSON serialization
@@ -21,6 +22,16 @@ namespace MusicBeePlugin
         private static bool _trackLIB, _albumLIB, _artistLIB = false;
         private static string _title, _album, _artist, _trackID, _albumID, _artistID, _imageURL;
         private static string _clientID = "05356b07a417487d9d8c6d0587de87a7";
+
+        // Incremented every time a new track-change search is kicked off (see
+        // ReceiveNotification in PanelInterface.cs). TrackSearch() captures the
+        // value that was current when IT was called, and re-checks it after each
+        // await. If a newer search has started in the meantime, this run is stale
+        // and must NOT touch the shared UI fields or repaint - otherwise two
+        // overlapping searches race and whichever happens to finish last wins,
+        // even if it's the one that failed. This is what was causing the panel
+        // to flash the correct track and then immediately show "No Track Found!".
+        private static long _searchGeneration = 0;
 
         private void RefreshPanelUi()
         {
@@ -259,13 +270,35 @@ namespace MusicBeePlugin
             }
         }
 
+        // True if `generation` is still the most recent TrackSearch() run. Used to
+        // detect that THIS run has been superseded by a newer track-change search
+        // that started while we were awaiting a network call - in which case we must
+        // not write to the shared _title/_trackID/etc fields or repaint, since doing
+        // so would either clobber a newer (already-correct) result, or send a
+        // library-check request using an ID that no longer matches what's on screen.
+        private static bool IsCurrentSearch(long generation)
+        {
+            return Interlocked.Read(ref _searchGeneration) == generation;
+        }
+
         public async Task<FullTrack> TrackSearch()
         {
+            // Claim a generation for this run. Every call to TrackSearch() - from a
+            // track change, from re-auth, from anywhere - gets its own increasing
+            // number. Whichever run finishes with the HIGHEST number belongs to the
+            // most recently requested track; any run that discovers a higher number
+            // exists by the time one of its awaits completes knows it has been
+            // superseded and bails out without touching shared state.
+            long myGeneration = Interlocked.Increment(ref _searchGeneration);
+
             if (string.IsNullOrWhiteSpace(_searchTerm))
             {
-                _trackMissing = 1;
-                _auth = 1;
-                RefreshPanelUi();
+                if (IsCurrentSearch(myGeneration))
+                {
+                    _trackMissing = 1;
+                    _auth = 1;
+                    RefreshPanelUi();
+                }
                 return null;
             }
 
@@ -274,6 +307,14 @@ namespace MusicBeePlugin
                 var track = await _spotify.Search.Item(
                     new SearchRequest(SearchRequest.Types.Track, _searchTerm)
                 );
+
+                if (!IsCurrentSearch(myGeneration))
+                {
+                    // A newer track-change search started while this search was in
+                    // flight. That newer run owns the shared UI state now - drop
+                    // this stale result instead of racing it.
+                    return null;
+                }
 
                 if (track?.Tracks?.Items == null || track.Tracks.Items.Count == 0)
                 {
@@ -324,58 +365,91 @@ namespace MusicBeePlugin
                     ? item.Album.Images[0].Url
                     : null;
 
-                var tracks = new LibraryCheckTracksRequest(
-                    new List<string> { _trackID }
-                );
-
-                var albums = new LibraryCheckAlbumsRequest(
-                    new List<string> { _albumID }
-                );
-
-                var artist = new FollowCheckCurrentUserRequest(
-                    FollowCheckCurrentUserRequest.Type.Artist,
-                    new List<string> { _artistID }
-                );
-
-                var tracksSaved = await _spotify.Library.CheckTracks(tracks);
-                var albumsSaved = await _spotify.Library.CheckAlbums(albums);
-                var artistFollowed = await _spotify.Follow.CheckCurrentUser(artist);
-
-                _trackLIB = tracksSaved[0];
-                _albumLIB = albumsSaved[0];
-                _artistLIB = artistFollowed[0];
-
+                // The search succeeded - commit and paint this now, BEFORE attempting
+                // the library-check calls below. A failure in those calls (or this run
+                // getting superseded mid-flight) must never undo a search that already
+                // succeeded. This is the fix for the panel flashing the correct track
+                // and then immediately reverting to "No Track Found!".
                 _trackMissing = 0;
                 _auth = 1;
                 RefreshPanelUi();
+
+                // Library-check calls run in their OWN try/catch, decoupled from the
+                // search above. They also re-validate that this run is still current -
+                // both before firing the request (so a superseded run never sends a
+                // check for the wrong track's IDs, which is what was producing the
+                // stray 404s in the log) and before writing the result back (so a
+                // slow response never overwrites a newer track's "Saved in Library"
+                // state).
+                try
+                {
+                    if (!IsCurrentSearch(myGeneration)) return null;
+
+                    var tracks = new LibraryCheckTracksRequest(new List<string> { _trackID });
+                    var albums = new LibraryCheckAlbumsRequest(new List<string> { _albumID });
+                    var artist = new FollowCheckCurrentUserRequest(
+                        FollowCheckCurrentUserRequest.Type.Artist,
+                        new List<string> { _artistID }
+                    );
+
+                    var tracksSaved = await _spotify.Library.CheckTracks(tracks);
+                    var albumsSaved = await _spotify.Library.CheckAlbums(albums);
+                    var artistFollowed = await _spotify.Follow.CheckCurrentUser(artist);
+
+                    if (!IsCurrentSearch(myGeneration)) return null;
+
+                    _trackLIB = tracksSaved[0];
+                    _albumLIB = albumsSaved[0];
+                    _artistLIB = artistFollowed[0];
+                    RefreshPanelUi();
+                }
+                catch (Exception ex)
+                {
+                    // Track/artwork/title from the block above still stand - a
+                    // library-check hiccup only means we don't know the saved/followed
+                    // state yet, so leave it as unknown/false rather than failing the
+                    // whole track.
+                    if (IsCurrentSearch(myGeneration))
+                    {
+                        _trackLIB = _albumLIB = _artistLIB = false;
+                        mbApiInterface.MB_Trace("TrackSearch (library check) failed: " + ex.GetType().Name + " - " + ex.Message);
+                        RefreshPanelUi();
+                    }
+                }
+
                 return null;
             }
             catch (APIException apiEx)
             {
-                _trackMissing = 1;
-                _trackLIB = _albumLIB = _artistLIB = false;
-                _auth = 1;
+                if (IsCurrentSearch(myGeneration))
+                {
+                    _trackMissing = 1;
+                    _trackLIB = _albumLIB = _artistLIB = false;
+                    _auth = 1;
 
-                var status = apiEx.Response?.StatusCode.ToString() ?? "unknown";
-                var body = apiEx.Response?.Body ?? "(no body)";
-                mbApiInterface.MB_Trace($"TrackSearch failed: APIException {status} - {body}");
+                    var status = apiEx.Response?.StatusCode.ToString() ?? "unknown";
+                    var body = apiEx.Response?.Body ?? "(no body)";
+                    mbApiInterface.MB_Trace($"TrackSearch (search) failed: APIException {status} - {body}");
 
-                RefreshPanelUi();
+                    RefreshPanelUi();
+                }
                 return null;
-
             }
             catch (Exception ex)
             {
-                _trackMissing = 1;
-                _trackLIB = _albumLIB = _artistLIB = false;
-                _auth = 1;
+                if (IsCurrentSearch(myGeneration))
+                {
+                    _trackMissing = 1;
+                    _trackLIB = _albumLIB = _artistLIB = false;
+                    _auth = 1;
 
-                // Log the real cause instead of silently swallowing it - this is what
-                // was making auth failures, rate limits, and indexing bugs all show up
-                // identically as a silent "No Track Found!" with no way to diagnose it.
-                mbApiInterface.MB_Trace("TrackSearch failed: " + ex.GetType().Name + " - " + ex.Message);
+                    // Log the real cause instead of silently swallowing it - this is what
+                    // was making auth failures, rate limits, and indexing bugs all show up
+                    // identically as a silent "No Track Found!" with no way to diagnose it.
+                    mbApiInterface.MB_Trace("TrackSearch (search) failed: " + ex.GetType().Name + " - " + ex.Message);
 
-                RefreshPanelUi();
+                    RefreshPanelUi();
+                }
                 return null;
             }
         }

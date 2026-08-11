@@ -113,12 +113,30 @@ namespace MusicBeePlugin
                 TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
                 TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(5, 50), text1);
 
-                WebClient webClient = new WebClient();
-                byte[] data = webClient.DownloadData(_imageURL);
-                System.Drawing.Image image = System.Drawing.Image.FromStream(new MemoryStream(data));
-                image = new Bitmap(image, new Size(65, 65));
-                e.Graphics.DrawImage(image, new Point(10, 80));
-                webClient.Dispose();
+                // This runs synchronously inside a Paint handler, so a slow/failed
+                // request here (bad URL, timeout, transient network error) must never
+                // be allowed to throw out of DrawPanel - an unhandled exception in a
+                // Paint handler can take the rest of the panel down with it. Worst case
+                // on failure: the text above still renders, just without artwork.
+                if (!string.IsNullOrWhiteSpace(_imageURL))
+                {
+                    try
+                    {
+                        using (WebClient webClient = new WebClient())
+                        {
+                            byte[] data = webClient.DownloadData(_imageURL);
+                            using (System.Drawing.Image rawImage = System.Drawing.Image.FromStream(new MemoryStream(data)))
+                            using (System.Drawing.Image image = new Bitmap(rawImage, new Size(65, 65)))
+                            {
+                                e.Graphics.DrawImage(image, new Point(10, 80));
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        mbApiInterface.MB_Trace("DrawPanel (artwork) failed: " + ex.GetType().Name + " - " + ex.Message);
+                    }
+                }
 
 
                 if (_trackLIB)
@@ -267,7 +285,6 @@ namespace MusicBeePlugin
 
                 case NotificationType.TrackChanged:
 
-                    _trackMissing = 0;
                     _num = 0;
 
                     // Read the tags for the NEW track first, and set _searchTerm
@@ -287,7 +304,23 @@ namespace MusicBeePlugin
                         return;
                     }
 
-                    _searchTerm = title + " " + artist;
+                    string newSearchTerm = title + " " + artist;
+
+                    // MusicBee can fire TrackChanged more than once for what is, from
+                    // the plugin's point of view, the same track (e.g. a metadata or
+                    // playback-state event arriving right after the track-id event).
+                    // If we already have a correctly displayed match for this exact
+                    // title+artist, searching again just creates another concurrent
+                    // TrackSearch() run for no reason - each one is safe on its own
+                    // thanks to the generation guard, but skipping the redundant call
+                    // avoids the extra API traffic entirely.
+                    if (newSearchTerm == _searchTerm && _trackMissing == 0)
+                    {
+                        return;
+                    }
+
+                    _searchTerm = newSearchTerm;
+                    _trackMissing = 0;
 
                     if (_auth == 1)
                     {
