@@ -117,7 +117,12 @@ namespace SpotifyAPI.Web
 
     public static Uri LibraryAlbums() => EUri($"me/albums");
 
-    public static Uri LibraryTracksContains() => EUri($"me/Library/contains");
+    // Was "me/Library/contains" - not a real Spotify endpoint, hence the 404s.
+    // Every sibling *Contains() method here follows the "me/<resource>/contains"
+    // pattern (see LibraryAlbumsContains and LibraryShowsContains above/below),
+    // and LibraryTracks() right below uses "me/tracks" as its resource name -
+    // this just brings the contains-check URL in line with that.
+    public static Uri LibraryTracksContains() => EUri($"me/tracks/contains");
 
     public static Uri LibraryTracks() => EUri($"me/tracks");
 
