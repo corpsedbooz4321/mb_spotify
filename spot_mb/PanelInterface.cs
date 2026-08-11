@@ -270,25 +270,29 @@ namespace MusicBeePlugin
                     _trackMissing = 0;
                     _num = 0;
 
+                    // Read the tags for the NEW track first, and set _searchTerm
+                    // BEFORE calling TrackSearch(). Previously TrackSearch() was
+                    // called here using the stale _searchTerm from the prior track,
+                    // then _searchTerm was updated and searched again - causing a
+                    // flash of the wrong (or no) result before the correct one loaded.
                     string title = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle);
                     string artist = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
 
-                    await TrackSearch();
-                    RefreshPanelUi();
-
-                    //_searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle) + " + " + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
-
-                    if (string.IsNullOrWhiteSpace(title) ||
-                        string.IsNullOrWhiteSpace(artist))
+                    if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist))
                     {
+                        // No usable tag data for this track - show "not found" and stop,
+                        // rather than searching with an empty/stale term.
+                        _trackMissing = 1;
+                        RefreshPanelUi();
                         return;
                     }
+
                     _searchTerm = title + " " + artist;
 
                     if (_auth == 1)
                     {
-                        mbApiInterface.MB_RefreshPanels();
                         await TrackSearch();
+                        mbApiInterface.MB_RefreshPanels();
                     }
 
                     panel.Invalidate();

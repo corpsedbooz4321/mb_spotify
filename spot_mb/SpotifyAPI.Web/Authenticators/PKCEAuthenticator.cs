@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using SpotifyAPI.Web.Http;
@@ -31,7 +32,6 @@ namespace SpotifyAPI.Web
     /// </summary>
     public event EventHandler<PKCETokenResponse>? TokenRefreshed;
 
-
     /// <summary>
     ///   The ClientID, defined in a spotify application in your Spotify Developer Dashboard
     /// </summary>
@@ -45,6 +45,16 @@ namespace SpotifyAPI.Web
     /// <value></value>
     public PKCETokenResponse InitialToken { get; }
 
+    /// <summary>
+    ///   Ensures only one token refresh (and one token-file write) happens at a time.
+    ///   Without this, multiple concurrent requests (e.g. search + library-check calls
+    ///   firing together on a track change) can each see an expired token and race to
+    ///   refresh it. PKCE refresh tokens are single-use/rotating, so the losing request(s)
+    ///   reuse an already-invalidated refresh token and fail - and, worse, concurrent
+    ///   writes to the token file on disk can leave it corrupted for future launches.
+    /// </summary>
+    private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
+
     public void SerializeConfig(PKCETokenResponse data)
     {
       string json = JsonConvert.SerializeObject(data, Newtonsoft.Json.Formatting.Indented);
@@ -52,7 +62,6 @@ namespace SpotifyAPI.Web
       {
         file.Write(json);
       }
-
     }
 
     public async Task Apply(IRequest request, IAPIConnector apiConnector)
@@ -61,19 +70,32 @@ namespace SpotifyAPI.Web
 
       if (InitialToken.IsExpired)
       {
-        var tokenRequest = new PKCETokenRefreshRequest(ClientId, InitialToken.RefreshToken);
-        var refreshedToken = await OAuthClient.RequestToken(tokenRequest, apiConnector).ConfigureAwait(false);
+        await _refreshLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+          // Re-check after acquiring the lock: another caller may have already
+          // refreshed the token (and rotated the refresh token) while we were
+          // waiting. If so, skip refreshing again with the now-stale value.
+          if (InitialToken.IsExpired)
+          {
+            var tokenRequest = new PKCETokenRefreshRequest(ClientId, InitialToken.RefreshToken);
+            var refreshedToken = await OAuthClient.RequestToken(tokenRequest, apiConnector).ConfigureAwait(false);
 
-        InitialToken.AccessToken = refreshedToken.AccessToken;
-        InitialToken.CreatedAt = refreshedToken.CreatedAt;
-        InitialToken.ExpiresIn = refreshedToken.ExpiresIn;
-        InitialToken.Scope = refreshedToken.Scope;
-        InitialToken.TokenType = refreshedToken.TokenType;
-        InitialToken.RefreshToken = refreshedToken.RefreshToken;
+            InitialToken.AccessToken = refreshedToken.AccessToken;
+            InitialToken.CreatedAt = refreshedToken.CreatedAt;
+            InitialToken.ExpiresIn = refreshedToken.ExpiresIn;
+            InitialToken.Scope = refreshedToken.Scope;
+            InitialToken.TokenType = refreshedToken.TokenType;
+            InitialToken.RefreshToken = refreshedToken.RefreshToken;
 
-        SerializeConfig(InitialToken);
-
-        TokenRefreshed?.Invoke(this, InitialToken);
+            SerializeConfig(InitialToken);
+            TokenRefreshed?.Invoke(this, InitialToken);
+          }
+        }
+        finally
+        {
+          _refreshLock.Release();
+        }
       }
 
       request.Headers["Authorization"] = $"{InitialToken.TokenType} {InitialToken.AccessToken}";

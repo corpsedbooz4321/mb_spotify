@@ -16,6 +16,7 @@ namespace MusicBeePlugin
     public partial class Plugin
     {
         private static SpotifyClient _spotify;
+        private static bool _codeExchanged = false;
         private static int _auth, _num, _trackMissing = 0;
         private static bool _trackLIB, _albumLIB, _artistLIB = false;
         private static string _title, _album, _artist, _trackID, _albumID, _artistID, _imageURL;
@@ -113,9 +114,18 @@ namespace MusicBeePlugin
                             await TrackSearch();
                             return; // Successfully authenticated from saved token!
                         }
-                        catch (Exception)
+                        catch (APIException apiEx)
                         {
-                            // Token expired/invalid, will proceed to web auth below
+                            _trackMissing = 1;
+                            _trackLIB = _albumLIB = _artistLIB = false;
+                            _auth = 1;
+
+                            var status = apiEx.Response?.StatusCode.ToString() ?? "unknown";
+                            var body = apiEx.Response?.Body ?? "(no body)";
+                            mbApiInterface.MB_Trace($"TrackSearch failed: APIException {status} - {body}");
+
+                            RefreshPanelUi();
+                            return;
                         }
                     }
                 }
@@ -138,6 +148,7 @@ namespace MusicBeePlugin
             bool browserOpened = false;
             try
             {
+
                 var (verifier, challenge) = PKCEUtil.GenerateCodes(120);
 
                 var loginRequest = new LoginRequest(
@@ -157,8 +168,10 @@ namespace MusicBeePlugin
 
                 server.PkceReceived += async (sender, response) =>
                 {
-                    await server.Stop();
+                    if (_codeExchanged) return;
+                    _codeExchanged = true;
 
+                    await server.Stop();
                     try
                     {
                         var initialResponse = await new OAuthClient().RequestToken(
@@ -196,6 +209,7 @@ namespace MusicBeePlugin
                             catch (APIException ex)
                             {
                                 System.Diagnostics.Debug.WriteLine($"Search error: {ex.Message}");
+                                mbApiInterface.MB_Trace("TrackSearch (post-auth) failed: " + ex.GetType().Name + " - " + ex.Message);
                             }
                         }));
                     }
@@ -271,25 +285,44 @@ namespace MusicBeePlugin
                     RefreshPanelUi();
                     return null;
                 }
-                //clampimg _num to a valid index insteadof trusting stale state
 
+                // _num can be changed elsewhere (e.g. cycling through match results
+                // for the current track) and is not necessarily valid for THIS track's
+                // result set - a smaller/different result count would otherwise throw
+                // an IndexOutOfRangeException here and get swallowed by the catch below,
+                // silently showing "No Track Found!" even though the search succeeded.
                 if (_num < 0 || _num >= track.Tracks.Items.Count)
                 {
                     _num = 0;
                 }
 
                 var item = track.Tracks.Items[_num];
-                _title = Truncate(item.Name, largeBold);
 
-                _artist = Truncate(string.Join(", ", from a in item.Artists select a.Name), smallRegular);
+                _title = Truncate(
+                    item.Name,
+                    largeBold
+                );
 
-                _album = Truncate(item.Album.Name, smallRegular);
+                _artist = Truncate(
+                    string.Join(
+                        ", ",
+                     from artistItem in item.Artists
+                     select artistItem.Name
+                    ),
+                    smallRegular
+                );
 
+                _album = Truncate(
+                   item.Album.Name,
+                 smallRegular
+                );
 
-                _trackID = track.Tracks.Items[_num].Id;
-                _albumID = track.Tracks.Items[_num].Album.Id;
-                _artistID = track.Tracks.Items[_num].Artists[0].Id;
-                _imageURL = track.Tracks.Items[_num].Album.Images[0].Url;
+                _trackID = item.Id;
+                _albumID = item.Album.Id;
+                _artistID = item.Artists.Count > 0 ? item.Artists[0].Id : null;
+                _imageURL = (item.Album.Images != null && item.Album.Images.Count > 0)
+                    ? item.Album.Images[0].Url
+                    : null;
 
                 var tracks = new LibraryCheckTracksRequest(
                     new List<string> { _trackID }
@@ -317,19 +350,31 @@ namespace MusicBeePlugin
                 RefreshPanelUi();
                 return null;
             }
-            catch (APIException)
+            catch (APIException apiEx)
             {
                 _trackMissing = 1;
                 _trackLIB = _albumLIB = _artistLIB = false;
                 _auth = 1;
+
+                var status = apiEx.Response?.StatusCode.ToString() ?? "unknown";
+                var body = apiEx.Response?.Body ?? "(no body)";
+                mbApiInterface.MB_Trace($"TrackSearch failed: APIException {status} - {body}");
+
                 RefreshPanelUi();
                 return null;
+
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 _trackMissing = 1;
                 _trackLIB = _albumLIB = _artistLIB = false;
                 _auth = 1;
+
+                // Log the real cause instead of silently swallowing it - this is what
+                // was making auth failures, rate limits, and indexing bugs all show up
+                // identically as a silent "No Track Found!" with no way to diagnose it.
+                mbApiInterface.MB_Trace("TrackSearch failed: " + ex.GetType().Name + " - " + ex.Message);
+
                 RefreshPanelUi();
                 return null;
             }
