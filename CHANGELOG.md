@@ -8,7 +8,7 @@ All notable changes to `mb_Spotify-Plugin` are documented here.
 - Preserved the original author's attribution and project history.
 - Added the MIT License to the maintained project.
 
-## 2026 — Aditya Mahi / Current Maintenance
+## 2026 — Aditya Sharma / Current Maintenance
 
 ### August 11, 2026 — Stable Working State
 
@@ -130,7 +130,7 @@ This marked the beginning of the project's modern continuation after the origina
 * Preserved attribution to the original author.
 * Updated project information to distinguish the original work from current maintenance.
 
-The project continues to credit **Zachary Cohen (`zkhcohen`)** as the original author while identifying **Aditya Mahi** as the current maintainer/developer.
+The project continues to credit **Zachary Cohen (`zkhcohen`)** as the original author while identifying **Aditya Sharma** as the current maintainer/developer.
 
 ---
 
@@ -177,6 +177,6 @@ The historical work and original release information remain attributed to the or
 
 # Current Maintainer
 
-**Aditya Mahi**
+**Aditya Sharma**
 
 Active development resumed in August 2026, with the goal of maintaining, stabilizing, improving, and eventually modernizing the project while preserving the original project's history and attribution.

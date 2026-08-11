@@ -287,7 +287,7 @@ The original `mb_Spotify-Plugin` project, architecture, and historical releases 
 
 ### Current Maintainer
 
-**Aditya Mahi**
+**Aditya Sharma**
 
 Active maintenance and development resumed in August 2026.
 
@@ -300,14 +300,14 @@ The current development builds upon the original project while preserving the or
 This project is licensed under the [MIT License](LICENSE).
 
 The original project was created by **Zachary Cohen (`zkhcohen`)**.  
-Development and maintenance resumed in 2026 under **Aditya Mahi**.
+Development and maintenance resumed in 2026 under **Aditya Sharma**.
 The original author's work and attribution are preserved in the project history.
 Permission to continue development and distribute the project under the MIT License was granted by the original author.
 
 Refer to the repository's license files and original project documentation for licensing information.
 
 **Original project:** Zachary Cohen / `zkhcohen`
-**Current maintainer:** Aditya Mahi
+**Current maintainer:** Aditya Sharma
 From August 8, 2026
 **Project:** `mb_Spotify-Plugin`
 
