@@ -31,14 +31,13 @@ namespace SpotifyAPI.Web
     /// </summary>
     public event EventHandler<AuthorizationCodeTokenResponse>? TokenRefreshed;
 
-
     /// <summary>
     ///   The ClientID, defined in a spotify application in your Spotify Developer Dashboard
     /// </summary>
     public string ClientId { get; }
 
     /// <summary>
-    ///   The ClientID, defined in a spotify application in your Spotify Developer Dashboard
+    ///   The ClientSecret, defined in a spotify application in your Spotify Developer Dashboard
     /// </summary>
     public string ClientSecret { get; }
 
@@ -48,6 +47,13 @@ namespace SpotifyAPI.Web
     /// <value></value>
     public AuthorizationCodeTokenResponse InitialToken { get; }
 
+    /// <summary>
+    ///   Ensures only one token refresh is in flight at a time. Without this, multiple
+    ///   concurrent requests (e.g. track/artwork/library-check firing together on a
+    ///   track change) can each see an expired token and race to refresh it, causing
+    ///   the losing request(s) to reuse an already-rotated refresh token and fail with
+    ///   invalid_grant.
+    /// </summary>
     private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
 
     public async Task Apply(IRequest request, IAPIConnector apiConnector)
@@ -59,7 +65,10 @@ namespace SpotifyAPI.Web
         await _refreshLock.WaitAsync().ConfigureAwait(false);
         try
         {
-          if (InitialToken.IsExpired) ;
+          // Re-check after acquiring the lock: another caller may have already
+          // refreshed the token while we were waiting, in which case we should NOT
+          // refresh again with the now stale RefreshToken.
+          if (InitialToken.IsExpired)
           {
             var tokenRequest = new AuthorizationCodeRefreshRequest(ClientId, ClientSecret, InitialToken.RefreshToken);
             var refreshedToken = await OAuthClient.RequestToken(tokenRequest, apiConnector).ConfigureAwait(false);
