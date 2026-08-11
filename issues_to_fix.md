@@ -1,4 +1,22 @@
-# Spotify API compatibility review
+# Issues to fix
+
+The following items are based on the recent git history and the current repository state. Items marked with ✅ are already addressed in recent commits, while items marked with ❌ still need attention.
+
+## Status summary
+
+- ✅ Resolved: The UI no longer appears visually stuck after authentication in the latest working state.
+- ✅ Resolved: Stale asynchronous search results are now prevented from overwriting newer results.
+- ✅ Resolved: Race conditions around Spotify token refresh were addressed with thread-safe handling.
+- ✅ Resolved: Index clamping and invalid search-result handling were improved.
+- ✅ Resolved: Multiple simultaneous authentication attempts are now prevented.
+- ✅ Resolved: Diagnostic logging and library-status checks were added to help debug API and auth issues.
+- ❌ Remaining: Move Spotify client configuration out of source code and into app settings or environment variables.
+- ❌ Remaining: Replace the vendored legacy SDK approach with a maintained dependency or a modern HTTP-based implementation.
+- ❌ Remaining: Modernize the project to a supported .NET target instead of the legacy framework assumptions.
+- ❌ Remaining: Harden token storage and refresh-token handling for better security and reliability.
+- ❌ Remaining: Add automated tests for authentication, token refresh, search, and library checks.
+
+## Compatibility review
 
 2026-08-10
 
