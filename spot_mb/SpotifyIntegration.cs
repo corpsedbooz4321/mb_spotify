@@ -381,37 +381,45 @@ namespace MusicBeePlugin
                 // stray 404s in the log) and before writing the result back (so a
                 // slow response never overwrites a newer track's "Saved in Library"
                 // state).
+
+
                 try
                 {
                     if (!IsCurrentSearch(myGeneration)) return null;
 
-                    var tracks = new LibraryCheckTracksRequest(new List<string> { _trackID });
+                    var tracks = new LibraryCheckTracksRequest(new List<string> { "spotify:track:" + _trackID });
                     var albums = new LibraryCheckAlbumsRequest(new List<string> { _albumID });
                     var artist = new FollowCheckCurrentUserRequest(
                         FollowCheckCurrentUserRequest.Type.Artist,
                         new List<string> { _artistID }
                     );
 
-                    var tracksSaved = await _spotify.Library.CheckTracks(tracks);
-                    var albumsSaved = await _spotify.Library.CheckAlbums(albums);
-                    var artistFollowed = await _spotify.Follow.CheckCurrentUser(artist);
+                    // Each check now runs in its own try/catch. Previously all three awaited
+                    // inside one try block, so the first one to throw (e.g. the old dead-endpoint
+                    // 403s) skipped the remaining two, and the single catch below zeroed out all
+                    // three flags together - even for checks that never got a chance to run.
+                    bool trackSaved = false, albumSaved = false, artistFollowed = false;
+
+                    try { trackSaved = (await _spotify.Library.CheckTracks(tracks))[0]; }
+                    catch (Exception ex) { mbApiInterface.MB_Trace("TrackSearch (CheckTracks) failed: " + ex.GetType().Name + " - " + ex.Message); }
+
+                    try { albumSaved = (await _spotify.Library.CheckAlbums(albums))[0]; }
+                    catch (Exception ex) { mbApiInterface.MB_Trace("TrackSearch (CheckAlbums) failed: " + ex.GetType().Name + " - " + ex.Message); }
+
+                    try { artistFollowed = (await _spotify.Follow.CheckCurrentUser(artist))[0]; }
+                    catch (Exception ex) { mbApiInterface.MB_Trace("TrackSearch (CheckCurrentUser) failed: " + ex.GetType().Name + " - " + ex.Message); }
 
                     if (!IsCurrentSearch(myGeneration)) return null;
 
-                    _trackLIB = tracksSaved[0];
-                    _albumLIB = albumsSaved[0];
-                    _artistLIB = artistFollowed[0];
+                    _trackLIB = trackSaved;
+                    _albumLIB = albumSaved;
+                    _artistLIB = artistFollowed;
                     RefreshPanelUi();
                 }
                 catch (Exception ex)
                 {
-                    // Track/artwork/title from the block above still stand - a
-                    // library-check hiccup only means we don't know the saved/followed
-                    // state yet, so leave it as unknown/false rather than failing the
-                    // whole track.
                     if (IsCurrentSearch(myGeneration))
                     {
-                        _trackLIB = _albumLIB = _artistLIB = false;
                         mbApiInterface.MB_Trace("TrackSearch (library check) failed: " + ex.GetType().Name + " - " + ex.Message);
                         RefreshPanelUi();
                     }

@@ -194,6 +194,9 @@ namespace MusicBeePlugin
         public void reAuthSpotify(object sender, EventArgs e)
         {
             File.Delete(_path);
+            _auth = 0;
+            _codeExchanged = false;
+
             if (!_authInProgress)
             {
                 SpotifyWebAuth();
