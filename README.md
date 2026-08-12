@@ -23,8 +23,9 @@ Because of Spotify's Developer Mode restrictions, each user must have a premium 
 
 1. Sign in to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/).
 2. Click **Create an App**. Give it a name (e.g., `MusicBee Plugin`) and a brief description.
-3. Open your application's settings and copy the **Client ID**.
-4. Configure the redirect URI required by mb_Spotify (if specified in the setup prompt) and save your changes.
+3. Add this link in the redirect Url - http://127.0.0.1:5000/callback.
+4. Open your application's settings and copy the **Client ID**.
+5. Configure the redirect URI required by mb_Spotify (if specified in the setup prompt) and save your changes.
 
 > 🔴 **Security Warning:** The plugin only requires your **Client ID**. Never share your Spotify password or Client Secret with anyone.
 
