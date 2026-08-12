@@ -181,11 +181,9 @@ namespace MusicBeePlugin
                     CodeChallenge = challenge,
                     Scope = new[] { Scopes.UserLibraryModify, Scopes.UserFollowModify, Scopes.UserFollowRead, Scopes.UserLibraryRead }
                 };
-                MessageBox.Show("gonna make login request...");
                 var uri = loginRequest.ToUri();
 
                 var server = new EmbedIOAuthServer(new Uri("http://127.0.0.1:5000/callback"), 5000);
-                MessageBox.Show("gonna make login request...");
 
                 await server.Start(); // to start the server so it can listen to the callback.//
 
@@ -222,8 +220,6 @@ namespace MusicBeePlugin
                             _authInProgress = false;
                             mbApiInterface.MB_RefreshPanels();
                             panel.Invalidate();
-                            MessageBox.Show("Logged in as : " + me.DisplayName); //added here so it displays after the main panel interface updates so the main context hide behind the 
-                            //user info using me.Displayname
 
                             try
                             {
