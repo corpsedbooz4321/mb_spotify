@@ -19,7 +19,7 @@ The plugin allows you to interact with your Spotify library directly from MusicB
 ## Installation & Setup
 
 ### 1. Create a Spotify Developer App
-Because of Spotify's Developer Mode restrictions, each user must configure their own application and provide a **Client ID** to the plugin.
+Because of Spotify's Developer Mode restrictions, each user must have a premium account and configure their own application and provide a **Client ID** to the plugin.
 
 1. Sign in to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/).
 2. Click **Create an App**. Give it a name (e.g., `MusicBee Plugin`) and a brief description.
