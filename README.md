@@ -21,6 +21,86 @@ Additional screenshots can be placed in the repository directory [showcase](show
 Development resumed in August 2026 with the goal of maintaining and improving the plugin while preserving the original project's history and attribution.
 
 The current development focuses on restoring reliability, improving asynchronous behavior, strengthening Spotify authentication, improving error handling, and eventually modernizing the underlying project.
+---
+## Installation
+
+### Requirements
+
+- [MusicBee](https://www.getmusicbee.com/)
+- A Spotify account
+- A Spotify Developer account
+- A Spotify Developer App configured for mb_Spotify
+- The **Client ID** from your Spotify Developer App
+- An active Spotify Premium subscription if required by Spotify for the owner of a Developer Mode application
+
+> <span style="color:green">Tip:</span> Create your Spotify Developer App and copy its **Client ID** before you install the plugin.
+
+### Installing the plugin
+
+1. Build the plugin or obtain the release files for `mb_Spotify`.
+2. Copy the plugin files into MusicBee's Plugins directory.
+   - Example Windows path: `C:\Users\<you>\AppData\Roaming\MusicBee\Plugins`
+3. Open MusicBee and verify that the plugin appears in `Edit > Preferences > Plugins`.
+4. Restart MusicBee after installation.
+
+> <span style="color:red">Warning:</span> mb_Spotify only requires the Spotify **Client ID**. Do not share your Spotify password or Client Secret with anyone.
+
+## Spotify Developer App Setup
+
+mb_Spotify does **not** use a shared Spotify Developer App.
+
+Each user must create and configure their own Spotify Developer App and provide its **Client ID** to mb_Spotify.
+
+This is required because Spotify's current Developer Mode places restrictions on applications and authorized users.
+
+### Important Information
+
+Before using mb_Spotify with Spotify, you will need:
+
+- A Spotify account.
+- A Spotify Developer account.
+- Your own Spotify Developer App.
+- The **Client ID** from your Spotify Developer App.
+- An active Spotify Premium subscription if required by Spotify for the owner of the Developer Mode application.
+
+Your Spotify Developer App belongs to you. mb_Spotify does not require your Spotify password or Client Secret.
+
+### Creating a Spotify Developer App
+
+1. Sign in to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/).
+2. Create a new application.
+3. Give the application a name and description.
+4. Open the application's settings.
+5. Copy the **Client ID**.
+6. Configure the redirect URI required by mb_Spotify.
+7. Save the application settings.
+
+### Configuring mb_Spotify
+
+When mb_Spotify asks for a Spotify Client ID, paste the Client ID from your Spotify Developer App.
+
+The Client ID identifies the Spotify Developer App that mb_Spotify will use when communicating with Spotify.
+
+After the Client ID has been configured, continue with Spotify authorization and grant the permissions requested by the plugin.
+
+##### NOW YOU HAVE YOU OWN MusicBee PLUGIN!!!
+
+### Why does every user need their own application?
+
+Spotify's current developer-access model places restrictions on Development Mode applications and their authorized users.
+
+Using a separate application for each user means that mb_Spotify does not depend on a single shared Developer App.
+
+Each user is responsible for their own:
+
+- Spotify Developer App.
+- Client ID.
+- Spotify Developer account.
+- Spotify API usage and restrictions.
+- Spotify account requirements.
+
+mb_Spotify only provides the MusicBee integration and communicates with Spotify using the application configured by the user.
+
 
 ---
 ## Current Features
@@ -71,7 +151,6 @@ mb_Spotify uses Spotify's OAuth 2.0 authorization flow with **PKCE**.
 Each user connects mb_Spotify to their own Spotify Developer App. The application Client ID is configured during the initial setup, after which Spotify authorization is performed through the normal OAuth flow.
 
 Authentication state is persisted so the plugin does not need to request authorization every time MusicBee starts.
-
 The authentication system also handles token renewal and prevents multiple refresh operations from occurring simultaneously.
 
 ### Authentication reliability
@@ -165,83 +244,6 @@ Diagnostic information can help identify:
 This logging was particularly useful during the 2026 Spotify API compatibility work and continues to assist with troubleshooting and future development.
 
 > <span style="color:red">**Note:** Diagnostic logs may contain Spotify API request information. When sharing logs publicly, remove any sensitive information or authentication data before posting them.</span>
-
-## Installation
-
-### Requirements
-
-- [MusicBee](https://www.getmusicbee.com/)
-- A Spotify account
-- A Spotify Developer account
-- A Spotify Developer App configured for mb_Spotify
-- The **Client ID** from your Spotify Developer App
-- An active Spotify Premium subscription if required by Spotify for the owner of a Developer Mode application
-
-> <span style="color:green">Tip:</span> Create your Spotify Developer App and copy its **Client ID** before you install the plugin.
-
-### Installing the plugin
-
-1. Build the plugin or obtain the release files for `mb_Spotify`.
-2. Copy the plugin files into MusicBee's Plugins directory.
-   - Example Windows path: `C:\Users\<you>\AppData\Roaming\MusicBee\Plugins`
-3. Open MusicBee and verify that the plugin appears in `Edit > Preferences > Plugins`.
-4. Restart MusicBee after installation.
-
-> <span style="color:red">Warning:</span> mb_Spotify only requires the Spotify **Client ID**. Do not share your Spotify password or Client Secret with anyone.
-
-## Spotify Developer App Setup
-
-mb_Spotify does **not** use a shared Spotify Developer App.
-
-Each user must create and configure their own Spotify Developer App and provide its **Client ID** to mb_Spotify.
-
-This is required because Spotify's current Developer Mode places restrictions on applications and authorized users.
-
-### Important Information
-
-Before using mb_Spotify with Spotify, you will need:
-
-- A Spotify account.
-- A Spotify Developer account.
-- Your own Spotify Developer App.
-- The **Client ID** from your Spotify Developer App.
-- An active Spotify Premium subscription if required by Spotify for the owner of the Developer Mode application.
-
-Your Spotify Developer App belongs to you. mb_Spotify does not require your Spotify password or Client Secret.
-
-### Creating a Spotify Developer App
-
-1. Sign in to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard/).
-2. Create a new application.
-3. Give the application a name and description.
-4. Open the application's settings.
-5. Copy the **Client ID**.
-6. Configure the redirect URI required by mb_Spotify.
-7. Save the application settings.
-
-### Configuring mb_Spotify
-
-When mb_Spotify asks for a Spotify Client ID, paste the Client ID from your Spotify Developer App.
-
-The Client ID identifies the Spotify Developer App that mb_Spotify will use when communicating with Spotify.
-
-After the Client ID has been configured, continue with Spotify authorization and grant the permissions requested by the plugin.
-
-### Why does every user need their own application?
-
-Spotify's current developer-access model places restrictions on Development Mode applications and their authorized users.
-
-Using a separate application for each user means that mb_Spotify does not depend on a single shared Developer App.
-
-Each user is responsible for their own:
-
-- Spotify Developer App.
-- Client ID.
-- Spotify Developer account.
-- Spotify API usage and restrictions.
-- Spotify account requirements.
-
-mb_Spotify only provides the MusicBee integration and communicates with Spotify using the application configured by the user.
 
 ### Security
 
