@@ -21,7 +21,10 @@ namespace MusicBeePlugin
         private static int _auth, _num, _trackMissing = 0;
         private static bool _trackLIB, _albumLIB, _artistLIB = false;
         private static string _title, _album, _artist, _trackID, _albumID, _artistID, _imageURL;
-        private static string _clientID = "05356b07a417487d9d8c6d0587de87a7";
+        // No longer hardcoded - each user sets their own Client ID via
+        // ClientIdSetupForm (see PanelInterface.cs), since Spotify's Development
+        // Mode allowlist can't scale to a shared app for many users.
+        private static string _clientID;
 
         // Incremented every time a new track-change search is kicked off (see
         // ReceiveNotification in PanelInterface.cs). TrackSearch() captures the
@@ -102,6 +105,15 @@ namespace MusicBeePlugin
         async void SpotifyWebAuth()
         {
             if (_authInProgress) return;
+
+            if (string.IsNullOrWhiteSpace(_clientID))
+            {
+                // No Client ID configured yet - nothing to authenticate against.
+                // The panel/menu should route the user to Configure() first;
+                // this is just a safety net.
+                return;
+            }
+
             _authInProgress = true;
 
             try

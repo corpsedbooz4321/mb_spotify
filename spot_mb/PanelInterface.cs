@@ -16,6 +16,7 @@ namespace MusicBeePlugin
         private Control panel;
         public int panelHeight;
         private static string _searchTerm, _path;
+        private static string _clientIdPath;
         private bool _runOnce = true;
         private static bool _authInProgress = false; // guards against triggering SpotifyWebAuth() twice
         Font largeBold, smallRegular, smallBold;
@@ -41,10 +42,44 @@ namespace MusicBeePlugin
             about.ConfigurationPanelHeight = 0;
 
             _path = mbApiInterface.Setting_GetPersistentStoragePath() + "token.xml";
+            _clientIdPath = mbApiInterface.Setting_GetPersistentStoragePath() + "clientid.txt";
             _cspParams.KeyContainerName = "SPOTIFY_XML_ENC_RSA_KEY";
             _rsaKey = new RSACryptoServiceProvider(_cspParams);
 
+            // Each user needs their own Spotify Client ID now (see ClientIdSetupForm) -
+            // load whatever was saved from a previous run, if any.
+            _clientID = LoadClientId();
+
             return about;
+        }
+
+        private string LoadClientId()
+        {
+            try
+            {
+                if (File.Exists(_clientIdPath))
+                {
+                    var saved = File.ReadAllText(_clientIdPath).Trim();
+                    return string.IsNullOrWhiteSpace(saved) ? null : saved;
+                }
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show("Error reading saved Client ID:\n" + e.Message, "Spotify Plugin Error");
+            }
+            return null;
+        }
+
+        private void SaveClientId(string clientId)
+        {
+            try
+            {
+                File.WriteAllText(_clientIdPath, clientId.Trim());
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show("Error saving Client ID:\n" + e.Message, "Spotify Plugin Error");
+            }
         }
 
         public int OnDockablePanelCreated(Control panel)
@@ -99,7 +134,9 @@ namespace MusicBeePlugin
 
             if (_runOnce)
             {
-                if (!_authInProgress)
+                // Only auto-attempt login if a Client ID has already been configured -
+                // otherwise wait for the user to click through the setup dialog first.
+                if (!string.IsNullOrWhiteSpace(_clientID) && !_authInProgress)
                 {
                     SpotifyWebAuth();
                 }
@@ -174,7 +211,14 @@ namespace MusicBeePlugin
             }
             else if (_auth == 0)
             {
-                TextRenderer.DrawText(e.Graphics, "Please Click Here to \nAuthenticate Spotify.", new Font(panel.Font.FontFamily, 14), new Point(4, 50), text1);
+                if (string.IsNullOrWhiteSpace(_clientID))
+                {
+                    TextRenderer.DrawText(e.Graphics, "Please Click Here to \nSet Up Your Spotify App.", new Font(panel.Font.FontFamily, 14), new Point(4, 50), text1);
+                }
+                else
+                {
+                    TextRenderer.DrawText(e.Graphics, "Please Click Here to \nAuthenticate Spotify.", new Font(panel.Font.FontFamily, 14), new Point(4, 50), text1);
+                }
             }
 
         }
@@ -182,10 +226,13 @@ namespace MusicBeePlugin
         public List<ToolStripItem> GetMenuItems()
         {
             List<ToolStripItem> list = new List<ToolStripItem>();
+
+            ToolStripMenuItem setup = new ToolStripMenuItem("Set Up Spotify App...");
+            setup.Click += (s, e) => Configure(IntPtr.Zero);
+            list.Add(setup);
+
             ToolStripMenuItem reAuth = new ToolStripMenuItem("Re-authenticate");
-
             reAuth.Click += reAuthSpotify;
-
             list.Add(reAuth);
 
             return list;
@@ -197,13 +244,56 @@ namespace MusicBeePlugin
             _auth = 0;
             _codeExchanged = false;
 
-            if (!_authInProgress)
+            if (string.IsNullOrWhiteSpace(_clientID))
+            {
+                Configure(IntPtr.Zero);
+            }
+            else if (!_authInProgress)
             {
                 SpotifyWebAuth();
             }
 
             mbApiInterface.MB_RefreshPanels();
             panel.Invalidate();
+        }
+
+        /// <summary>
+        /// Opens the Client ID setup dialog. Called from the plugin's Configure entry
+        /// point (MusicBee's plugin settings) and from the panel when no Client ID has
+        /// been set yet. Saving a new/changed Client ID clears any existing session,
+        /// since a token issued for a different Spotify app can't be reused.
+        /// </summary>
+        public bool Configure(IntPtr panelHandle)
+        {
+            using (var form = new ClientIdSetupForm(_clientID))
+            {
+                if (form.ShowDialog() == DialogResult.OK)
+                {
+                    var newClientId = form.ClientId;
+
+                    if (!string.IsNullOrWhiteSpace(newClientId) && newClientId != _clientID)
+                    {
+                        _clientID = newClientId;
+                        SaveClientId(_clientID);
+
+                        // Different app = different credentials required. Drop any
+                        // saved token and force a fresh login against the new app.
+                        if (File.Exists(_path))
+                        {
+                            File.Delete(_path);
+                        }
+                        _auth = 0;
+                        _codeExchanged = false;
+                        _spotify = null;
+                        _trackMissing = 1;
+
+                        mbApiInterface.MB_RefreshPanels();
+                        panel?.Invalidate();
+                    }
+                }
+            }
+
+            return true;
         }
 
         private void PanelClick(object sender, EventArgs e)
@@ -213,7 +303,11 @@ namespace MusicBeePlugin
             MouseEventArgs me = (MouseEventArgs)e;
             if (_auth == 0 && me.Button == System.Windows.Forms.MouseButtons.Left)
             {
-                if (!_authInProgress)
+                if (string.IsNullOrWhiteSpace(_clientID))
+                {
+                    Configure(IntPtr.Zero);
+                }
+                else if (!_authInProgress)
                 {
                     SpotifyWebAuth();
                 }
@@ -334,11 +428,6 @@ namespace MusicBeePlugin
                     panel.Invalidate();
                     break;
             }
-        }
-
-        public bool Configure(IntPtr panelHandle)
-        {
-            return true;
         }
 
         public void SaveSettings()
