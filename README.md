@@ -11,6 +11,7 @@ The plugin allows you to interact with your Spotify library directly from MusicB
 ## Screenshots
 
 ![MusicBee plugin panel](showcase/PluginPanel.png)
+![MusicBee plugin panel](showcase/view.png)
 
 ---
 
@@ -67,12 +68,12 @@ The project is written in **C#** and uses the Spotify Web API for integration.
 
 ## Project History
 
-* **Original Development (up to v3.1):** Originally developed by Zachary Cohen (`zkhcohen`). This era established the base performance improvements, Spotify API 6.x.x integration, and fundamental PKCE authentication. The repository was archived in November 2022.
-* **2026 Restoration:** Active development resumed to restore reliable Spotify authentication, fix UI freezes, introduce thread safety, and implement search-generation control. See the [`CHANGELOG`](CHANGELOG.md) for a detailed breakdown of ongoing improvements.
+  
 
----
 
-## Credits & License
+
+
+
 
 * **Original Author:** Zachary Cohen (`zkhcohen`)
 * **Current Maintainer:** Aditya Sharma (Resumed August 2026)
