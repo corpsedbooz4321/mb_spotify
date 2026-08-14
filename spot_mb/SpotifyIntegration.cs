@@ -238,7 +238,6 @@ namespace MusicBeePlugin
                             _authInProgress = false;
                             mbApiInterface.MB_RefreshPanels();
                             panel.Invalidate();
-                            //user info using me.Displayname
 
                             try
                             {
