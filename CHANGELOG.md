@@ -2,6 +2,22 @@
 # CHANGELOG
 All notable changes to `mb_Spotify-Plugin` are documented here.
 
+## 2026 — Aditya Sharma / Current Maintenance (Continued)
+
+### August 14, 2026 — UI Improvements & Performance Optimization
+
+**Commits:** `635b8db`, `e272206`, `504ff71`, `fa581b6`, `8684fd3`
+
+* Optimized artwork loading in `DrawPanel` for improved performance.
+* Implemented artwork caching and search result optimization in `SpotifyIntegration`.
+* Added new status messages with icons for tracks, albums, and artists in library rows.
+* Implemented rounded rectangle drawing for improved UI appearance.
+* Updated library row display with enhanced status messaging.
+
+These changes improved the plugin's performance and user interface by implementing caching strategies and providing better visual feedback through icon-based status messages.
+
+---
+
 ### August 11, 2026 — MIT Licensing
 
 - Received permission from original author Zachary Cohen (`zkhcohen`) to continue development and distribute the project under the MIT License.
