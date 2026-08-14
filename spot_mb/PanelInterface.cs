@@ -176,29 +176,29 @@ namespace MusicBeePlugin
 
                 if (_trackLIB)
                 {
-                    TextRenderer.DrawText(e.Graphics, "Track Saved in Library", smallBold, new Point(80, 85), text1);
+                    TextRenderer.DrawText(e.Graphics, "❤︎ Saved Track", smallBold, new Point(80, 85), text1);
                 }
                 else
                 {
-                    TextRenderer.DrawText(e.Graphics, "Track Not in Library", smallRegular, new Point(80, 85), text1);
+                    TextRenderer.DrawText(e.Graphics, "♡ Save Track", smallRegular, new Point(80, 85), text1);
                 }
 
                 if (_albumLIB)
                 {
-                    TextRenderer.DrawText(e.Graphics, "Album Saved in Library", smallBold, new Point(80, 105), text1);
+                    TextRenderer.DrawText(e.Graphics, "❤︎ Saved Album", smallBold, new Point(80, 105), text1);
                 }
                 else
                 {
-                    TextRenderer.DrawText(e.Graphics, "Album Not in Library", smallRegular, new Point(80, 105), text1);
+                    TextRenderer.DrawText(e.Graphics, "♡ Save Track", smallRegular, new Point(80, 105), text1);
                 }
 
                 if (_artistLIB)
                 {
-                    TextRenderer.DrawText(e.Graphics, "Artist Already Followed", smallBold, new Point(80, 125), text1);
+                    TextRenderer.DrawText(e.Graphics, "✮ Following", smallBold, new Point(80, 125), text1);
                 }
                 else
                 {
-                    TextRenderer.DrawText(e.Graphics, "Artist Not Followed", smallRegular, new Point(80, 125), text1);
+                    TextRenderer.DrawText(e.Graphics, "＋ Follow Artist", smallRegular, new Point(80, 125), text1);
                 }
 
 
