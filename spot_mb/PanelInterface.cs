@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Drawing.Drawing2D;
 using System.IO;
 using System.Drawing;
 using System.Windows.Forms;
@@ -19,45 +18,6 @@ namespace MusicBeePlugin
         private static string _searchTerm, _path;
         private static string _clientIdPath;
         private bool _runOnce = true;
-        private static readonly Color SavedColor = Color.FromArgb(30, 215, 96); // Spotify green
-        private static readonly Color NotSavedColor = Color.Gray;
-
-        private GraphicsPath RoundedRect(Rectangle bounds, int radius)
-        {
-            int diameter = radius * 2;
-            var path = new GraphicsPath();
-            var arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
-
-            path.AddArc(arc, 180, 90);
-            arc.X = bounds.Right - diameter;
-            path.AddArc(arc, 270, 90);
-            arc.Y = bounds.Bottom - diameter;
-            path.AddArc(arc, 0, 90);
-            arc.X = bounds.Left;
-            path.AddArc(arc, 90, 90);
-            path.CloseFigure();
-
-            return path;
-        }
-
-        private void DrawLibraryRow(Graphics g, bool isSaved, char filledGlyph, char emptyGlyph, string label, int y)
-        {
-            var color = isSaved ? SavedColor : NotSavedColor;
-
-            var box = new Rectangle(76, y - 4, panel.Width - 84, 22);
-            using (var path = RoundedRect(box, 8))
-            using (var boxBrush = new SolidBrush(Color.FromArgb(30, color)))
-            {
-                g.FillPath(boxBrush, path);
-            }
-
-            var glyph = (isSaved ? filledGlyph : emptyGlyph).ToString();
-            TextRenderer.DrawText(g, glyph, iconFont, new Point(box.X + 6, y - 2), color);
-
-            var labelFont = isSaved ? smallBold : smallRegular;
-            TextRenderer.DrawText(g, label, labelFont, new Point(box.X + 28, y), panel.ForeColor);
-        }
-
         private static bool _authInProgress = false; // guards against triggering SpotifyWebAuth() twice
         Font largeBold, smallRegular, smallBold, iconFont;
         private RSACryptoServiceProvider _rsaKey;
@@ -214,35 +174,32 @@ namespace MusicBeePlugin
                     }
                 }
 
-                DrawLibraryRow(e.Graphics, _trackLIB, '♥', '♡', _trackLIB ? "Saved Track" : "Save Track", 85);
-                DrawLibraryRow(e.Graphics, _albumLIB, '●', '○', _albumLIB ? "Saved Album" : "Save Album", 105);
-                DrawLibraryRow(e.Graphics, _artistLIB, '★', '☆', _artistLIB ? "Following" : "Follow Artist", 125);
-                //if (_trackLIB)
-                //{
-                //    TextRenderer.DrawText(e.Graphics, "Track Saved in Library", smallBold, new Point(80, 85), text1);
-                //}
-                //else
-                //{
-                //    TextRenderer.DrawText(e.Graphics, "Track Not in Library", smallRegular, new Point(80, 85), text1);
-                //}
+                if (_trackLIB)
+                {
+                    TextRenderer.DrawText(e.Graphics, "✓ Saved Track", smallBold, new Point(80, 85), text1);
+                }
+                else
+                {
+                    TextRenderer.DrawText(e.Graphics, "♡ Save Track", smallRegular, new Point(80, 85), text1);
+                }
 
-                //if (_albumLIB)
-                //{
-                //    TextRenderer.DrawText(e.Graphics, "Album Saved in Library", smallBold, new Point(80, 105), text1);
-                //}
-                //else
-                //{
-                //    TextRenderer.DrawText(e.Graphics, "Album Not in Library", smallRegular, new Point(80, 105), text1);
-                //}
+                if (_albumLIB)
+                {
+                    TextRenderer.DrawText(e.Graphics, "✓ Saved Album", smallBold, new Point(80, 105), text1);
+                }
+                else
+                {
+                    TextRenderer.DrawText(e.Graphics, "♡ Save Album", smallRegular, new Point(80, 105), text1);
+                }
 
-                //if (_artistLIB)
-                //{
-                //    TextRenderer.DrawText(e.Graphics, "Artist Already Followed", smallBold, new Point(80, 125), text1);
-                //}
-                //else
-                //{
-                //    TextRenderer.DrawText(e.Graphics, "Artist Not Followed", smallRegular, new Point(80, 125), text1);
-                //}
+                if (_artistLIB)
+                {
+                    TextRenderer.DrawText(e.Graphics, "✓ Following", smallBold, new Point(80, 125), text1);
+                }
+                else
+                {
+                    TextRenderer.DrawText(e.Graphics, "＋ Follow Artist", smallRegular, new Point(80, 125), text1);
+                }
 
 
             }
