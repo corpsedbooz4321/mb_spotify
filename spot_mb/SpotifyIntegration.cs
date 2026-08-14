@@ -7,6 +7,8 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Threading;
+using System.Net.Http;
+using System.Drawing;
 using System.Security.Cryptography;
 using Newtonsoft.Json;
 using System.Linq.Expressions; // Added for JSON serialization
@@ -35,6 +37,22 @@ namespace MusicBeePlugin
         // even if it's the one that failed. This is what was causing the panel
         // to flash the correct track and then immediately show "No Track Found!".
         private static long _searchGeneration = 0;
+
+        // Caches the search result for a given "title artist" query, so replaying a
+        // track (or repeat mode) doesn't hit the network again for something already
+        // looked up this session. Capped to avoid unbounded growth over a long session.
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SearchResponse> _searchCache =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, SearchResponse>(StringComparer.OrdinalIgnoreCase);
+        private const int MaxSearchCacheEntries = 200;
+
+        // Holds the already-downloaded, already-resized artwork for the current track.
+        // DrawPanel used to download and decode the image from scratch on every single
+        // repaint (window move, focus change, etc.) - this caches it so a repaint is
+        // just a cheap blit of an existing in-memory bitmap instead of a network call.
+        private static string _cachedArtworkUrl;
+        private static Bitmap _cachedArtwork;
+        private static readonly object _artworkLock = new object();
+        private static readonly HttpClient _artworkHttpClient = new HttpClient();
 
         private void RefreshPanelUi()
         {
@@ -220,6 +238,7 @@ namespace MusicBeePlugin
                             _authInProgress = false;
                             mbApiInterface.MB_RefreshPanels();
                             panel.Invalidate();
+                            //user info using me.Displayname
 
                             try
                             {
@@ -289,6 +308,74 @@ namespace MusicBeePlugin
             return Interlocked.Read(ref _searchGeneration) == generation;
         }
 
+        /// <summary>
+        /// Downloads and pre-resizes artwork once per track, caching the result so
+        /// DrawPanel (a Paint handler, which fires on every resize/focus-change/etc.)
+        /// never has to hit the network or re-decode the image - it just blits
+        /// whatever is currently cached.
+        /// </summary>
+        private async Task LoadArtworkAsync(string imageUrl, long generation)
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl))
+            {
+                return;
+            }
+
+            // Already cached for this exact URL - nothing to do.
+            lock (_artworkLock)
+            {
+                if (_cachedArtworkUrl == imageUrl && _cachedArtwork != null)
+                {
+                    return;
+                }
+            }
+
+            try
+            {
+                byte[] data = await _artworkHttpClient.GetByteArrayAsync(imageUrl).ConfigureAwait(false);
+
+                if (!IsCurrentSearch(generation))
+                {
+                    // A newer track superseded this one before the download finished -
+                    // discard rather than caching artwork nobody asked for anymore.
+                    return;
+                }
+
+                using (var rawImage = System.Drawing.Image.FromStream(new MemoryStream(data)))
+                {
+                    var resized = new Bitmap(rawImage, new Size(65, 65));
+
+                    lock (_artworkLock)
+                    {
+                        _cachedArtwork?.Dispose();
+                        _cachedArtwork = resized;
+                        _cachedArtworkUrl = imageUrl;
+                    }
+                }
+
+                if (IsCurrentSearch(generation))
+                {
+                    RefreshPanelUi();
+                }
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace("LoadArtworkAsync failed: " + ex.GetType().Name + " - " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Thread-safe accessor for DrawPanel to read the current cached artwork
+        /// without racing the background download/swap in LoadArtworkAsync.
+        /// </summary>
+        public static Bitmap GetCachedArtwork(string forImageUrl)
+        {
+            lock (_artworkLock)
+            {
+                return (_cachedArtworkUrl == forImageUrl) ? _cachedArtwork : null;
+            }
+        }
+
         public async Task<FullTrack> TrackSearch()
         {
             // Claim a generation for this run. Every call to TrackSearch() - from a
@@ -312,9 +399,34 @@ namespace MusicBeePlugin
 
             try
             {
-                var track = await _spotify.Search.Item(
-                    new SearchRequest(SearchRequest.Types.Track, _searchTerm)
-                );
+                SearchResponse track;
+
+                if (_searchCache.TryGetValue(_searchTerm, out var cachedTrack))
+                {
+                    track = cachedTrack;
+                }
+                else
+                {
+                    track = await _spotify.Search.Item(
+                        new SearchRequest(SearchRequest.Types.Track, _searchTerm)
+                    );
+
+                    if (track?.Tracks?.Items != null && track.Tracks.Items.Count > 0)
+                    {
+                        _searchCache[_searchTerm] = track;
+
+                        // Simple cap so a long listening session doesn't grow this
+                        // unbounded. Not true LRU, just a coarse size limit.
+                        if (_searchCache.Count > MaxSearchCacheEntries)
+                        {
+                            var oldestKey = _searchCache.Keys.FirstOrDefault();
+                            if (oldestKey != null)
+                            {
+                                _searchCache.TryRemove(oldestKey, out _);
+                            }
+                        }
+                    }
+                }
 
                 if (!IsCurrentSearch(myGeneration))
                 {
@@ -382,6 +494,12 @@ namespace MusicBeePlugin
                 _auth = 1;
                 RefreshPanelUi();
 
+                // Fire-and-forget: download and cache the artwork now, once, rather
+                // than letting DrawPanel re-download it on every repaint. Not awaited
+                // so the text/library-check flow below isn't held up by it; it repaints
+                // the panel itself once the image is ready.
+                _ = LoadArtworkAsync(_imageURL, myGeneration);
+
                 // Library-check calls run in their OWN try/catch, decoupled from the
                 // search above. They also re-validate that this run is still current -
                 // both before firing the request (so a superseded run never sends a
@@ -402,20 +520,49 @@ namespace MusicBeePlugin
                         new List<string> { _artistID }
                     );
 
-                    // Each check now runs in its own try/catch. Previously all three awaited
-                    // inside one try block, so the first one to throw (e.g. the old dead-endpoint
-                    // 403s) skipped the remaining two, and the single catch below zeroed out all
-                    // three flags together - even for checks that never got a chance to run.
-                    bool trackSaved = false, albumSaved = false, artistFollowed = false;
+                    // Each check still fails independently (one 403 doesn't zero out
+                    // the other two), but now they run CONCURRENTLY instead of one
+                    // after another - three sequential round-trips became roughly one
+                    // round-trip's worth of latency (the slowest of the three).
+                    async Task<bool> SafeCheckTracks()
+                    {
+                        try { return (await _spotify.Library.CheckTracks(tracks))[0]; }
+                        catch (Exception ex)
+                        {
+                            mbApiInterface.MB_Trace("TrackSearch (CheckTracks) failed: " + ex.GetType().Name + " - " + ex.Message);
+                            return false;
+                        }
+                    }
 
-                    try { trackSaved = (await _spotify.Library.CheckTracks(tracks))[0]; }
-                    catch (Exception ex) { mbApiInterface.MB_Trace("TrackSearch (CheckTracks) failed: " + ex.GetType().Name + " - " + ex.Message); }
+                    async Task<bool> SafeCheckAlbums()
+                    {
+                        try { return (await _spotify.Library.CheckAlbums(albums))[0]; }
+                        catch (Exception ex)
+                        {
+                            mbApiInterface.MB_Trace("TrackSearch (CheckAlbums) failed: " + ex.GetType().Name + " - " + ex.Message);
+                            return false;
+                        }
+                    }
 
-                    try { albumSaved = (await _spotify.Library.CheckAlbums(albums))[0]; }
-                    catch (Exception ex) { mbApiInterface.MB_Trace("TrackSearch (CheckAlbums) failed: " + ex.GetType().Name + " - " + ex.Message); }
+                    async Task<bool> SafeCheckArtist()
+                    {
+                        try { return (await _spotify.Follow.CheckCurrentUser(artist))[0]; }
+                        catch (Exception ex)
+                        {
+                            mbApiInterface.MB_Trace("TrackSearch (CheckCurrentUser) failed: " + ex.GetType().Name + " - " + ex.Message);
+                            return false;
+                        }
+                    }
 
-                    try { artistFollowed = (await _spotify.Follow.CheckCurrentUser(artist))[0]; }
-                    catch (Exception ex) { mbApiInterface.MB_Trace("TrackSearch (CheckCurrentUser) failed: " + ex.GetType().Name + " - " + ex.Message); }
+                    var trackTask = SafeCheckTracks();
+                    var albumTask = SafeCheckAlbums();
+                    var artistTask = SafeCheckArtist();
+
+                    await Task.WhenAll(trackTask, albumTask, artistTask);
+
+                    bool trackSaved = trackTask.Result;
+                    bool albumSaved = albumTask.Result;
+                    bool artistFollowed = artistTask.Result;
 
                     if (!IsCurrentSearch(myGeneration)) return null;
 
