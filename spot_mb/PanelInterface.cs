@@ -150,28 +150,26 @@ namespace MusicBeePlugin
                 TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
                 TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(5, 50), text1);
 
-                // This runs synchronously inside a Paint handler, so a slow/failed
-                // request here (bad URL, timeout, transient network error) must never
-                // be allowed to throw out of DrawPanel - an unhandled exception in a
-                // Paint handler can take the rest of the panel down with it. Worst case
-                // on failure: the text above still renders, just without artwork.
+                // Artwork is downloaded and resized ONCE per track (see LoadArtworkAsync
+                // in SpotifyIntegration.cs, kicked off right after a search succeeds).
+                // DrawPanel fires on every resize/focus-change/etc., so re-downloading
+                // here on every repaint (the old behavior) was a real performance
+                // problem - this is now just a cheap blit of an already-decoded bitmap.
+                // If the download hasn't finished yet (or failed), we simply skip
+                // drawing it this pass; the panel repaints again once it's ready.
                 if (!string.IsNullOrWhiteSpace(_imageURL))
                 {
-                    try
+                    var cachedImage = GetCachedArtwork(_imageURL);
+                    if (cachedImage != null)
                     {
-                        using (WebClient webClient = new WebClient())
+                        try
                         {
-                            byte[] data = webClient.DownloadData(_imageURL);
-                            using (System.Drawing.Image rawImage = System.Drawing.Image.FromStream(new MemoryStream(data)))
-                            using (System.Drawing.Image image = new Bitmap(rawImage, new Size(65, 65)))
-                            {
-                                e.Graphics.DrawImage(image, new Point(10, 80));
-                            }
+                            e.Graphics.DrawImage(cachedImage, new Point(10, 80));
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        mbApiInterface.MB_Trace("DrawPanel (artwork) failed: " + ex.GetType().Name + " - " + ex.Message);
+                        catch (Exception ex)
+                        {
+                            mbApiInterface.MB_Trace("DrawPanel (artwork) failed: " + ex.GetType().Name + " - " + ex.Message);
+                        }
                     }
                 }
 
