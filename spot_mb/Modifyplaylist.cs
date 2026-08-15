@@ -61,12 +61,17 @@ namespace MusicBeePlugin
 
 		// Corner widget geometry, computed fresh each paint against the current panel width.
 		private Rectangle PlaylistWidgetBounds => new Rectangle(panel.Width - 96, 4, 92, 16);
+		private Rectangle PlaylistActionRowBounds => new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + 4,
+		PlaylistWidgetBounds.Width, 18);
 		private Rectangle PlaylistDropdownBounds
 		{
 			get
 			{
 				int rows = 1 + (_dropdownPlaylists?.Count ?? 0); // "Create Playlist" + playlists
-				return new Rectangle(panel.Width - 156, 22, 152, rows * 18);
+				int top = _selectedPlaylist != null
+					? PlaylistAcitonRowBounds.Bottom = 4
+					: PlaylistWidgetBounds.Bottom + 4;
+				return new Rectangle(panel.Width - 156, top, 152, rows * 18);
 			}
 		}
 
@@ -139,9 +144,8 @@ namespace MusicBeePlugin
 				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 		}
 
-		private Rectangle MinusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 38, widget.Y - 1, 18, 18);
-		private Rectangle PlusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 19, widget.Y - 1, 18, 18);
-
+		private Rectangle MinusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 44, PlaylistActionRowBounds.Y, 18, 18);
+		private Rectangle PlusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 18, PlaylistActionRowBounds.Y, 18, 18);
 		private void DrawPlaylistDropdown(Graphics g)
 		{
 			var fg = panel.ForeColor;
