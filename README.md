@@ -4,25 +4,21 @@ A Spotify integration plugin for [MusicBee](https://www.getmusicbee.com/).
 
 [⬇️ Skip to Installation & Setup](#installation--setup)
 
-The plugin allows you to interact with your Spotify library directly from MusicBee, including searching for tracks, viewing Spotify track information and artwork, checking library status, and interacting with Spotify authentication.
+The plugin allows you to interact with your Spotify library directly from MusicBee, including searching for tracks, viewing Spotify track information and artwork, checking library status and interacting with Spotify authentication.
 
 > **Project status:** Actively maintained and under continued development.
 
 ## Screenshots
 
-![MusicBee plugin panel](showcase/PluginPanel.png)
+![MusicBee plugin panel](showcase/v3.1.1.png)
 ![MusicBee plugin panel](showcase/view.png)
 
 ## Before
 ![MusicBee plugin panel](showcase/before.png)
 
-## After
-![MusicBee plugin panel](showcase/after.png)
 
-## Tutorial
-![Tutorial](tutorial/lv_0_20260814114211.mp4)
-
----
+[b]Video Guide:[/b]
+[url=https://drive.google.com/file/d/1pTKUGugkZwgeFneb_xX_kWhi2VZNuYM8/view?usp=drive_link][b]Watch Video Tutorial / Setup Guide[/b][/url]
 
 ## Installation & Setup
 
