@@ -146,6 +146,7 @@ namespace MusicBeePlugin
 
             if (_auth == 1 && _trackMissing != 1)
             {
+                DrawPlaylistWidget(e.Graphics);
 
                 TextRenderer.DrawText(e.Graphics, _title, largeBold, new Point(5, 10), text1);
                 TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
@@ -316,6 +317,14 @@ namespace MusicBeePlugin
             }
             else if (_auth == 1 && me.Button == System.Windows.Forms.MouseButtons.Left)
             {
+
+
+                Point clickPoint = panel.PointToClient(Cursor.Position);
+                if (HandlePlaylistWidgetClick(clickPoint))
+                {
+                    panel.Invalidate();
+                    return;
+                }
 
                 Point point = panel.PointToClient(Cursor.Position);
                 float currentPosX = point.X;

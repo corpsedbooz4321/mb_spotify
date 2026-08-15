@@ -197,7 +197,10 @@ namespace MusicBeePlugin
                 {
                     CodeChallengeMethod = "S256",
                     CodeChallenge = challenge,
-                    Scope = new[] { Scopes.UserLibraryModify, Scopes.UserFollowModify, Scopes.UserFollowRead, Scopes.UserLibraryRead }
+                    Scope = new[] {
+                        Scopes.UserLibraryModify, Scopes.UserFollowModify, Scopes.UserFollowRead, Scopes.UserLibraryRead,
+                        Scopes.PlaylistModifyPrivate, Scopes.PlaylistModifyPublic, Scopes.PlaylistReadPrivate
+                        }
                 };
                 var uri = loginRequest.ToUri();
 
