@@ -11,10 +11,10 @@ The plugin allows you to interact with your Spotify library directly from MusicB
 ## Screenshots
 
 ![MusicBee plugin panel](showcase/v3.1.1.png)
-![MusicBee plugin panel](showcase/view.png)
-
-## Before
-![MusicBee plugin panel](showcase/before.png)
+![MusicBee showcase](showcase/showcase2.png)
+![MusicBee showcase](showcase/showcase3.png)
+![MusicBee showcase](showcase/showcase4.png)
+![MusicBee showcase](showcase/showcase1.jpg)
 
 
 [b]Video Guide:[/b]
