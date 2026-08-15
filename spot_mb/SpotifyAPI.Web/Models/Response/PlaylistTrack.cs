@@ -11,7 +11,7 @@ namespace SpotifyAPI.Web
 
     [JsonProperty("item")]
     [JsonConverter(typeof(PlayableItemConverter))]
-    public T Track { get; set; } = default!;
+    public T Item { get; set; } = default!;
   }
 }
 
