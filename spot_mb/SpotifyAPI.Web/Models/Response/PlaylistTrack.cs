@@ -9,6 +9,7 @@ namespace SpotifyAPI.Web
     public PublicUser AddedBy { get; set; } = default!;
     public bool IsLocal { get; set; }
 
+    [JsonProperty("item")]
     [JsonConverter(typeof(PlayableItemConverter))]
     public T Track { get; set; } = default!;
   }
