@@ -494,6 +494,7 @@ namespace MusicBeePlugin
                 // and then immediately reverting to "No Track Found!".
                 _trackMissing = 0;
                 _auth = 1;
+                OnPlaylistWidgetTrackChanged();
                 RefreshPanelUi();
 
                 // Fire-and-forget: download and cache the artwork now, once, rather
