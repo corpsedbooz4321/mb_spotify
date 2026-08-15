@@ -2,8 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Newtonsoft.Json;
 using SpotifyAPI.Web;
 
 namespace MusicBeePlugin
@@ -470,6 +474,28 @@ namespace MusicBeePlugin
 		/// library/follow "contains" checks) - the only way to know is to page through
 		/// the playlist's own items and look for a matching URI.
 		/// </summary>
+		/// <summary>
+		/// Pulls the played item off a playlist-page entry without hardcoding a
+		/// property name. Different versions/branches of SpotifyAPI.Web's
+		/// PlaylistTrack&lt;T&gt; have exposed this as either .Track or .Item, and
+		/// the compiler has rejected BOTH names at different points on this
+		/// project - which means whichever one is actually compiled in isn't
+		/// reliably knowable from source alone. Reflection sidesteps the
+		/// ambiguity entirely: it works whichever name the real, currently
+		/// installed package uses, and needs no further guessing.
+		/// </summary>
+		private static FullTrack ExtractFullTrack(object entry)
+		{
+			if (entry == null)
+			{
+				return null;
+			}
+
+			var type = entry.GetType();
+			var prop = type.GetProperty("Track") ?? type.GetProperty("Item");
+			return prop?.GetValue(entry) as FullTrack;
+		}
+
 		private async Task<bool> IsTrackInPlaylistAsync(string playlistId, string trackUri)
 		{
 			var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
@@ -494,11 +520,8 @@ namespace MusicBeePlugin
 				{
 					foreach (var entry in page.Items)
 					{
-						// entry.Track is typed as IPlayableItem (a marker interface -
-						// it doesn't expose Uri directly). Since the request above asks
-						// for AdditionalTypes.Track only, the concrete type here is
-						// FullTrack - the same class already used in TrackSearch().
-						if (entry?.Track is FullTrack fullTrack &&
+						var fullTrack = ExtractFullTrack(entry);
+						if (fullTrack != null &&
 							string.Equals(fullTrack.Uri, trackUri, StringComparison.OrdinalIgnoreCase))
 						{
 							return true;
@@ -542,6 +565,61 @@ namespace MusicBeePlugin
 			}
 		}
 
+		// Dedicated client for the raw fallback call below - kept separate from
+		// _artworkHttpClient (SpotifyIntegration.cs) since that one is unauthenticated
+		// and shared for image downloads; mixing an Authorization header onto it
+		// would leak a bearer token onto unrelated requests.
+		private static readonly HttpClient _rawApiHttpClient = new HttpClient();
+
+		/// <summary>
+		/// Spotify's Feb 2026 API migration removed DELETE /playlists/{id}/tracks
+		/// entirely - its replacement, DELETE /playlists/{id}/items, also renamed
+		/// the body key from "tracks" to "items". The installed SpotifyAPI.Web SDK's
+		/// Playlists.RemoveItems() still targets the old route/key, so every call
+		/// hits a dead endpoint and comes back "No uris provided". This bypasses the
+		/// SDK for just this one call and hits the new endpoint directly, until the
+		/// SDK ships a fix.
+		///
+		/// Reuses the same token file SpotifyWebAuth() already trusts rather than
+		/// reaching into PKCEAuthenticator's internals for the current access token.
+		/// A cheap authenticated call is made first so the authenticator refreshes
+		/// (and re-persists to _path) if the token has expired, then the now-current
+		/// token is read straight from that file.
+		/// </summary>
+		private async Task<bool> RemoveTrackFromPlaylistViaRawApiAsync(string playlistId, string trackUri)
+		{
+			await _spotify.UserProfile.Current().ConfigureAwait(false);
+
+			var token = DeserializeConfig(_path, _rsaKey);
+			if (token == null || string.IsNullOrWhiteSpace(token.AccessToken))
+			{
+				mbApiInterface.MB_Trace("RemoveTrackFromPlaylistViaRawApiAsync: no access token available");
+				return false;
+			}
+
+			var body = JsonConvert.SerializeObject(new
+			{
+				items = new[] { new { uri = trackUri } }
+			});
+
+			using (var request = new HttpRequestMessage(HttpMethod.Delete, $"https://api.spotify.com/v1/playlists/{playlistId}/items"))
+			{
+				request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+				request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+				var response = await _rawApiHttpClient.SendAsync(request).ConfigureAwait(false);
+				var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+				if (!response.IsSuccessStatusCode)
+				{
+					mbApiInterface.MB_Trace($"RemoveTrackFromPlaylistViaRawApiAsync failed: {(int)response.StatusCode} {response.StatusCode} - {responseBody}");
+					return false;
+				}
+
+				return true;
+			}
+		}
+
 		private async void RemoveCurrentTrackFromSelectedPlaylist()
 		{
 			if (_playlistActionInProgress || _selectedPlaylist == null || string.IsNullOrWhiteSpace(_trackID))
@@ -552,18 +630,14 @@ namespace MusicBeePlugin
 
 			try
 			{
-				var request = new PlaylistRemoveItemsRequest
-				{
-					Tracks = new List<PlaylistRemoveItemsRequest.Item>
-					{
-						new PlaylistRemoveItemsRequest.Item { Uri = "spotify:track:" + _trackID }
-					}
-				};
-				await _spotify.Playlists.RemoveItems(_selectedPlaylist.Id, request).ConfigureAwait(false);
+				bool removed = await RemoveTrackFromPlaylistViaRawApiAsync(_selectedPlaylist.Id, "spotify:track:" + _trackID).ConfigureAwait(false);
 
-				_trackInSelectedPlaylist = false;
-				_playlistMembershipKnown = true;
-				RefreshPanelUi();
+				if (removed)
+				{
+					_trackInSelectedPlaylist = false;
+					_playlistMembershipKnown = true;
+					RefreshPanelUi();
+				}
 			}
 			catch (Exception ex)
 			{
