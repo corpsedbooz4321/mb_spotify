@@ -15,7 +15,7 @@ namespace SpotifyAPI.Web
       Ensure.ArgumentNotNullOrEmptyString(playlistId, nameof(playlistId));
       Ensure.ArgumentNotNull(request, nameof(request));
 
-      return API.Delete<SnapshotResponse>(URLs.PlaylistTracks(playlistId), null, request.BuildBodyParams());
+      return API.Delete<SnapshotResponse>(URLs.PlaylistItems(playlistId), null, request.BuildBodyParams());
     }
 
     public Task<SnapshotResponse> AddItems(string playlistId, PlaylistAddItemsRequest request)
@@ -23,7 +23,7 @@ namespace SpotifyAPI.Web
       Ensure.ArgumentNotNullOrEmptyString(playlistId, nameof(playlistId));
       Ensure.ArgumentNotNull(request, nameof(request));
 
-      return API.Post<SnapshotResponse>(URLs.PlaylistTracks(playlistId), null, request.BuildBodyParams());
+      return API.Post<SnapshotResponse>(URLs.PlaylistItems(playlistId), null, request.BuildBodyParams());
     }
 
     public Task<Paging<PlaylistTrack<IPlayableItem>>> GetItems(string playlistId)
@@ -38,15 +38,14 @@ namespace SpotifyAPI.Web
       Ensure.ArgumentNotNullOrEmptyString(playlistId, nameof(playlistId));
       Ensure.ArgumentNotNull(request, nameof(request));
 
-      return API.Get<Paging<PlaylistTrack<IPlayableItem>>>(URLs.PlaylistTracks(playlistId), request.BuildQueryParams());
+      return API.Get<Paging<PlaylistTrack<IPlayableItem>>>(URLs.PlaylistItems(playlistId), request.BuildQueryParams());
     }
 
     public Task<FullPlaylist> Create(string userId, PlaylistCreateRequest request)
     {
-      Ensure.ArgumentNotNullOrEmptyString(userId, nameof(userId));
       Ensure.ArgumentNotNull(request, nameof(request));
 
-      return API.Post<FullPlaylist>(URLs.UserPlaylists(userId), null, request.BuildBodyParams());
+      return API.Post<FullPlaylist>(URLs.CurrentUserPlaylists(), null, request.BuildBodyParams());
     }
 
     public async Task<bool> UploadCover(string playlistId, string base64JpgData)

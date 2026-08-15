@@ -39,6 +39,8 @@ namespace SpotifyAPI.Web
 
     public static Uri PlaylistTracks(string playlistId) => EUri($"playlists/{playlistId}/tracks");
 
+    public static Uri PlaylistItems(string playlistId) => EUri($"playlists/{playlistId}/items");
+
     public static Uri UserPlaylists(string userId) => EUri($"users/{userId}/playlists");
 
     public static Uri PlaylistImages(string playlistId) => EUri($"playlists/{playlistId}/images");
