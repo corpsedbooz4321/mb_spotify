@@ -198,7 +198,7 @@ namespace MusicBeePlugin
                 }
                 else
                 {
-                    TextRenderer.DrawText(e.Graphics, "＋ Follow Artist", smallRegular, new Point(80, 125), text1);
+                    TextRenderer.DrawText(e.Graphics, "+ Follow Artist", smallRegular, new Point(80, 125), text1);
                 }
 
 
