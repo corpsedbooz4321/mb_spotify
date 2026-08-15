@@ -15,8 +15,10 @@ namespace MusicBeePlugin
 	///
 	/// Behavior (as spec'd):
 	/// - Corner widget shows "Playlist" (nothing selected) or "[Name]  -  +" (selected).
-	/// - Clicking it opens a small dropdown, fetched LIVE from Spotify every time it
-	///   opens (first 3 playlists returned by the account) - nothing is cached to disk.
+	/// - Clicking it opens a small dropdown. The first open each session
+	///   fetches live from Spotify; after that the list is cached in memory
+	///   (never to disk) for the rest of the session, until you create a
+	///   playlist through this widget (which invalidates it) or the app restarts.
 	/// - Dropdown always lists "Create Playlist" first, then up to 3 existing playlists.
 	/// - Selecting "Create Playlist" opens a small name-entry popup, creates the
 	///   playlist on Spotify immediately, then the corner reverts to plain "Playlist"
@@ -59,17 +61,99 @@ namespace MusicBeePlugin
 		private static List<SimplePlaylist> _dropdownPlaylists = null; // only populated while the dropdown is open
 		private static bool _playlistActionInProgress = false; // guards +/- and Create against double-clicks
 
+		// --- Paint-time caches -------------------------------------------------
+		// DrawPlaylistWidget/DrawPlaylistDropdown/DrawRoundedIconButton used to
+		// new-up a Pen/SolidBrush/GraphicsPath on every single paint. These are
+		// cached instead and reused for the lifetime of the plugin. The set of
+		// distinct colors in play here is tiny (a handful of fixed alphas over
+		// whatever the current theme's fg/bg happen to be), so the cache stays
+		// small even across theme changes - it's a deliberate trade of a few
+		// never-disposed GDI handles for zero per-paint allocation.
+		private static readonly Dictionary<int, Pen> _penCache = new Dictionary<int, Pen>();
+		private static readonly Dictionary<int, Brush> _brushCache = new Dictionary<int, Brush>();
+		private static GraphicsPath _iconButtonPath; // 18x18 rounded rect at the origin; positioned via TranslateTransform per button instead of rebuilt each time
+		private static readonly Dictionary<(string name, int panelWidth), string> _truncateCache = new Dictionary<(string, int), string>();
+
+		private static Pen GetPen(Color color)
+		{
+			int key = color.ToArgb();
+			if (!_penCache.TryGetValue(key, out var pen))
+			{
+				pen = new Pen(color);
+				_penCache[key] = pen;
+			}
+			return pen;
+		}
+
+		private static Brush GetBrush(Color color)
+		{
+			int key = color.ToArgb();
+			if (!_brushCache.TryGetValue(key, out var brush))
+			{
+				brush = new SolidBrush(color);
+				_brushCache[key] = brush;
+			}
+			return brush;
+		}
+
+		private static GraphicsPath GetIconButtonPath()
+		{
+			// Both callers (MinusButtonBounds/PlusButtonBounds) are fixed at 18x18,
+			// so a single cached path built at the origin and translated into place
+			// is safe. If either button size ever changes, this needs revisiting.
+			if (_iconButtonPath == null)
+			{
+				_iconButtonPath = RoundedRect(new Rectangle(0, 0, 18, 18), 5);
+			}
+			return _iconButtonPath;
+		}
+
+		/// <summary>
+		/// Thin memoization wrapper around the existing Truncate() helper. Keyed
+		/// by (name, panel width) so a resize - which can change how much text
+		/// fits - naturally invalidates stale entries instead of needing an
+		/// explicit cache-clear hook.
+		/// </summary>
+		private string TruncateCached(string name, Font font)
+		{
+			var key = (name, panel.Width);
+			if (_truncateCache.TryGetValue(key, out var cached))
+			{
+				return cached;
+			}
+
+			var truncated = Truncate(name, font);
+
+			// Bounded in practice (selected playlist name + up to 3 dropdown
+			// names per panel width), but guard against unbounded growth across
+			// many resizes over a long session anyway.
+			if (_truncateCache.Count > 64)
+			{
+				_truncateCache.Clear();
+			}
+			_truncateCache[key] = truncated;
+			return truncated;
+		}
+
 		// Corner widget geometry, computed fresh each paint against the current panel width.
 		private Rectangle PlaylistWidgetBounds => new Rectangle(panel.Width - 96, 4, 92, 16);
-		private Rectangle PlaylistActionRowBounds => new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + 4,
-		PlaylistWidgetBounds.Width, 18);
+
+		// The +/- buttons now live on their own row beneath the name, with a
+		// small gap so they read as a distinct action row rather than crowding
+		// the name.
+		private Rectangle PlaylistActionRowBounds =>
+			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + 4, PlaylistWidgetBounds.Width, 18);
+
 		private Rectangle PlaylistDropdownBounds
 		{
 			get
 			{
 				int rows = 1 + (_dropdownPlaylists?.Count ?? 0); // "Create Playlist" + playlists
+																 // When a playlist is selected the action row is visible beneath the
+																 // name, so the dropdown needs to start below that instead of
+																 // overlapping it.
 				int top = _selectedPlaylist != null
-					? PlaylistAcitonRowBounds.Bottom = 4
+					? PlaylistActionRowBounds.Bottom + 4
 					: PlaylistWidgetBounds.Bottom + 4;
 				return new Rectangle(panel.Width - 156, top, 152, rows * 18);
 			}
@@ -88,10 +172,7 @@ namespace MusicBeePlugin
 			// Plain rectangle for the widget itself - rounding is reserved for the
 			// +/- action buttons only, so it reads as "this shape means clickable
 			// action" rather than being used decoratively everywhere.
-			using (var borderPen = new Pen(Color.FromArgb(50, fg)))
-			{
-				g.DrawRectangle(borderPen, widget);
-			}
+			g.DrawRectangle(GetPen(Color.FromArgb(50, fg)), widget);
 
 			if (_selectedPlaylist == null)
 			{
@@ -100,11 +181,11 @@ namespace MusicBeePlugin
 			}
 			else
 			{
-				var name = Truncate(_selectedPlaylist.Name, smallRegular);
+				var name = TruncateCached(_selectedPlaylist.Name, smallRegular);
 
-				// Reserve the right-hand ~38px of the widget for the two icon buttons
-				// so the name never overlaps them, regardless of how long it is.
-				var nameRect = new Rectangle(widget.X + 4, widget.Y, widget.Width - 42, widget.Height);
+				// Full width now - the +/- buttons live on their own row beneath,
+				// so the name no longer needs to leave room for them here.
+				var nameRect = new Rectangle(widget.X + 4, widget.Y, widget.Width - 8, widget.Height);
 				TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
 					TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
@@ -132,13 +213,15 @@ namespace MusicBeePlugin
 			int borderAlpha = active ? 70 : 25;
 			var glyphColor = active ? fg : Color.FromArgb(90, fg);
 
-			using (var path = RoundedRect(bounds, 5))
-			using (var fillBrush = new SolidBrush(Color.FromArgb(fillAlpha, fg)))
-			using (var borderPen = new Pen(Color.FromArgb(borderAlpha, fg)))
-			{
-				g.FillPath(fillBrush, path);
-				g.DrawPath(borderPen, path);
-			}
+			var fillBrush = GetBrush(Color.FromArgb(fillAlpha, fg));
+			var borderPen = GetPen(Color.FromArgb(borderAlpha, fg));
+			var path = GetIconButtonPath();
+
+			var state = g.Save();
+			g.TranslateTransform(bounds.X, bounds.Y);
+			g.FillPath(fillBrush, path);
+			g.DrawPath(borderPen, path);
+			g.Restore(state);
 
 			TextRenderer.DrawText(g, glyph, iconFont, bounds, glyphColor,
 				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
@@ -146,6 +229,7 @@ namespace MusicBeePlugin
 
 		private Rectangle MinusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 44, PlaylistActionRowBounds.Y, 18, 18);
 		private Rectangle PlusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 18, PlaylistActionRowBounds.Y, 18, 18);
+
 		private void DrawPlaylistDropdown(Graphics g)
 		{
 			var fg = panel.ForeColor;
@@ -153,12 +237,8 @@ namespace MusicBeePlugin
 
 			// Plain rectangle, same reasoning as the widget above - rounding is
 			// reserved for the +/- buttons specifically.
-			using (var bgBrush = new SolidBrush(panel.BackColor))
-			using (var borderPen = new Pen(Color.FromArgb(60, fg)))
-			{
-				g.FillRectangle(bgBrush, bounds);
-				g.DrawRectangle(borderPen, bounds);
-			}
+			g.FillRectangle(GetBrush(panel.BackColor), bounds);
+			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
 
 			int rowY = bounds.Y;
 			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, 18);
@@ -171,7 +251,7 @@ namespace MusicBeePlugin
 				foreach (var pl in _dropdownPlaylists)
 				{
 					var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, 18);
-					var label = Truncate(pl.Name, smallRegular);
+					var label = TruncateCached(pl.Name, smallRegular);
 					TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
 						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
 					rowY += 18;
@@ -252,15 +332,32 @@ namespace MusicBeePlugin
 			return false;
 		}
 
+		// In-memory only (never written to disk) session cache. Fetched once,
+		// the first time the dropdown is opened, then reused for the rest of
+		// the session - only CreatePlaylistAsync invalidates it. Trade-off:
+		// playlists added/removed/renamed from elsewhere (phone app, web
+		// player) during the session won't show up here until either you
+		// create a playlist through this widget or MusicBee restarts.
+		private static List<SimplePlaylist> _dropdownPlaylistsCache = null;
+
 		private async void OpenPlaylistDropdown()
 		{
 			_playlistDropdownOpen = true;
-			_dropdownPlaylists = null; // show just "Create Playlist" while the live fetch is in flight
+
+			if (_dropdownPlaylistsCache != null)
+			{
+				// Already fetched this session - serve straight from cache, no round trip.
+				_dropdownPlaylists = _dropdownPlaylistsCache;
+				panel.Invalidate();
+				RefreshPanelUi();
+				return;
+			}
+
+			_dropdownPlaylists = null; // show just "Create Playlist" while this session's first fetch is in flight
 			panel.Invalidate();
 
 			try
 			{
-				// Live every time, per spec - nothing about the playlist list is cached.
 				var page = await _spotify.Playlists.CurrentUsers().ConfigureAwait(false);
 				var first3 = new List<SimplePlaylist>();
 
@@ -273,39 +370,81 @@ namespace MusicBeePlugin
 					}
 				}
 
+				_dropdownPlaylistsCache = first3;
 				_dropdownPlaylists = first3;
 			}
 			catch (Exception ex)
 			{
 				mbApiInterface.MB_Trace("OpenPlaylistDropdown (fetch playlists) failed: " + ex.GetType().Name + " - " + ex.Message);
 				_dropdownPlaylists = new List<SimplePlaylist>();
+
+				// Deliberately NOT caching a failed fetch - leave
+				// _dropdownPlaylistsCache null so the next open retries instead
+				// of being stuck empty for the rest of the session.
 			}
 
 			RefreshPanelUi();
 		}
 
-		private async void SelectPlaylist(SimplePlaylist playlist)
+		private void SelectPlaylist(SimplePlaylist playlist)
 		{
 			_selectedPlaylist = playlist;
 			_playlistMembershipKnown = false;
 			_trackInSelectedPlaylist = false;
 			RefreshPanelUi();
 
+			_ = RefreshMembershipForCurrentTrackAsync(playlist);
+		}
+
+		/// <summary>
+		/// Call this whenever the currently-loaded track changes (e.g. the next
+		/// song starts playing) while a playlist is selected. Without this, the
+		/// +/- buttons keep showing the *previous* track's membership state -
+		/// e.g. "+" stays greyed out for the new song just because the old one
+		/// was already in the playlist.
+		///
+		/// Hook this into wherever the plugin already reacts to a track change
+		/// elsewhere (e.g. the existing TrackChanged handling that updates
+		/// Saved Track / Save Album / Follow Artist) - this file has no
+		/// visibility into that event on its own.
+		/// </summary>
+		private void OnPlaylistWidgetTrackChanged()
+		{
+			if (_selectedPlaylist == null)
+			{
+				return;
+			}
+
+			_playlistMembershipKnown = false;
+			_trackInSelectedPlaylist = false;
+			RefreshPanelUi();
+
+			_ = RefreshMembershipForCurrentTrackAsync(_selectedPlaylist);
+		}
+
+		/// <summary>
+		/// Runs the live membership check for the current track against the
+		/// given playlist. Guarded by BOTH playlist identity and track ID at
+		/// completion - a slow check landing after the user picked a different
+		/// playlist, or after the track changed underneath it, is dropped
+		/// rather than applied to the wrong context.
+		/// </summary>
+		private async Task RefreshMembershipForCurrentTrackAsync(SimplePlaylist playlist)
+		{
 			if (string.IsNullOrWhiteSpace(_trackID))
 			{
 				return;
 			}
 
-			var myGeneration = playlist; // capture, in case the user picks a different playlist mid-check
-			string trackUri = "spotify:track:" + _trackID;
+			var myPlaylist = playlist;
+			var myTrackId = _trackID; // capture - a check for the old track finishing late must not overwrite a newer one's state
+			string trackUri = "spotify:track:" + myTrackId;
 
 			try
 			{
 				bool inPlaylist = await IsTrackInPlaylistAsync(playlist.Id, trackUri).ConfigureAwait(false);
 
-				// If the user has since selected a different playlist (or a track change
-				// happened) while this check was in flight, drop the stale result.
-				if (!ReferenceEquals(_selectedPlaylist, myGeneration))
+				if (!ReferenceEquals(_selectedPlaylist, myPlaylist) || _trackID != myTrackId)
 				{
 					return;
 				}
@@ -316,8 +455,8 @@ namespace MusicBeePlugin
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("SelectPlaylist (membership check) failed: " + ex.GetType().Name + " - " + ex.Message);
-				if (ReferenceEquals(_selectedPlaylist, myGeneration))
+				mbApiInterface.MB_Trace("RefreshMembershipForCurrentTrackAsync failed: " + ex.GetType().Name + " - " + ex.Message);
+				if (ReferenceEquals(_selectedPlaylist, myPlaylist) && _trackID == myTrackId)
 				{
 					// Leave _playlistMembershipKnown false - both +/- stay greyed rather
 					// than guessing and risking a duplicate-add or a no-op remove.
@@ -336,7 +475,15 @@ namespace MusicBeePlugin
 			var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
 			{
 				Limit = 100,
-				Offset = 0
+				Offset = 0,
+				// A FullTrack normally drags along album art URLs, every artist,
+				// audio-feature refs, etc. All this check needs is the URI, so
+				// ask Spotify to only send that plus the pagination cursor - for
+				// a playlist near the 10k-track ceiling this meaningfully shrinks
+				// what's fetched and parsed per page. Fields is a get-only
+				// IList<string>, so it's populated via collection initializer
+				// (which calls .Add on the existing list) rather than assigned.
+				Fields = { "items(track(uri))", "next" }
 			};
 
 			while (true)
@@ -486,6 +633,11 @@ namespace MusicBeePlugin
 				// to plain "Playlist"; the user opens the dropdown again to pick it.
 				_selectedPlaylist = null;
 				_playlistMembershipKnown = false;
+
+				// Invalidate the cache so the newly created playlist shows up on
+				// the next open instead of waiting out the TTL.
+				_dropdownPlaylistsCache = null;
+
 				RefreshPanelUi();
 			}
 			catch (Exception ex)
