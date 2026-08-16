@@ -102,29 +102,70 @@ namespace MusicBeePlugin
 			return truncated;
 		}
 
-		// Corner widget geometry, computed fresh each paint against the current panel width.
-		// Margins widened from the original 4px on top/right - it was reading as
-		// flush against the panel edges.
-		private Rectangle PlaylistWidgetBounds => new Rectangle(panel.Width - 100, 6, 92, 16);
+		/// <summary>
+		/// Layout below is derived from text actually measured at the panel's
+		/// current font, instead of hardcoded pixel constants. TextRenderer.MeasureText
+		/// already returns correct pixel sizes for whatever DPI/font-metrics are
+		/// active in the current environment, so building geometry from these
+		/// measurements - rather than fixed numbers picked to look right on one
+		/// machine - is what keeps the corner widget from clipping or squishing
+		/// when DPI scaling or font metrics differ between installs.
+		/// </summary>
+		private static Size MeasureLabel(string text, Font font) =>
+			TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding);
 
-		// Add/Remove now live on their own row beneath the name, with a small
-		// gap so they read as a distinct action row rather than crowding the
-		// name. Sized for plain smallRegular text now, not the old 18px icon boxes.
+		// "Playlist" is the widest string shown in the collapsed state - everything
+		// else (margins, row heights, widget width) scales off this single measurement.
+		private Size PlaylistLabelSize => MeasureLabel("Playlist", smallRegular);
+
+		// A spacing unit tied to the font's own line height rather than a fixed
+		// pixel count, so gaps/margins grow and shrink with text size/DPI instead
+		// of staying frozen at whatever looked right at one specific scale.
+		private int SpacingUnit => Math.Max(2, PlaylistLabelSize.Height / 4);
+
+		// "Create Playlist" (smallBold) is the tallest/widest string in the
+		// dropdown, so dropdown row height and minimum width anchor off it.
+		private int DropdownRowHeight => MeasureLabel("Create Playlist", smallBold).Height + SpacingUnit;
+
+		// Corner widget geometry, computed fresh each paint against the current panel
+		// width AND the current font metrics.
+		private Rectangle PlaylistWidgetBounds
+		{
+			get
+			{
+				int height = PlaylistLabelSize.Height + SpacingUnit;
+				// Double the "Playlist" label's own width - room for a truncated
+				// playlist name, not just the collapsed-state word itself.
+				int width = PlaylistLabelSize.Width * 2;
+				int margin = SpacingUnit * 2; // inset from the panel's top/right edges
+				return new Rectangle(panel.Width - width - margin, margin, width, height);
+			}
+		}
+
+		// Add/Remove/Refresh live on their own row beneath the name, with a small
+		// gap so they read as a distinct action row rather than crowding the name.
 		private Rectangle PlaylistActionRowBounds =>
-			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + 6, PlaylistWidgetBounds.Width, 14);
+			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + SpacingUnit,
+				PlaylistWidgetBounds.Width, PlaylistLabelSize.Height + SpacingUnit / 2);
 
 		private Rectangle PlaylistDropdownBounds
 		{
 			get
 			{
 				int rows = 1 + (_dropdownPlaylists?.Count ?? 0); // "Create Playlist" + playlists
-																 // When a playlist is selected the action row is visible beneath the
-																 // name, so the dropdown needs to start below that instead of
-																 // overlapping it.
+				int rowHeight = DropdownRowHeight;
+				// At least as wide as "Create Playlist" itself (plus padding), and
+				// never narrower than the corner widget it hangs off of.
+				int width = Math.Max(
+					MeasureLabel("Create Playlist", smallBold).Width + SpacingUnit * 4,
+					PlaylistWidgetBounds.Width * 2);
+				// When a playlist is selected the action row is visible beneath the
+				// name, so the dropdown needs to start below that instead of
+				// overlapping it.
 				int top = _selectedPlaylist != null
-					? PlaylistActionRowBounds.Bottom + 4
-					: PlaylistWidgetBounds.Bottom + 4;
-				return new Rectangle(panel.Width - 156, top, 152, rows * 18);
+					? PlaylistActionRowBounds.Bottom + SpacingUnit
+					: PlaylistWidgetBounds.Bottom + SpacingUnit;
+				return new Rectangle(panel.Width - width - SpacingUnit * 2, top, width, rows * rowHeight);
 			}
 		}
 
@@ -154,7 +195,7 @@ namespace MusicBeePlugin
 
 				// Full width now - the +/- buttons live on their own row beneath,
 				// so the name no longer needs to leave room for them here.
-				var nameRect = new Rectangle(widget.X + 4, widget.Y, widget.Width - 8, widget.Height);
+				var nameRect = new Rectangle(widget.X + SpacingUnit, widget.Y, widget.Width - SpacingUnit * 2, widget.Height);
 				TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
 					TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
@@ -200,27 +241,28 @@ namespace MusicBeePlugin
 		private Rectangle ActionButtonBounds(Rectangle widget)
 		{
 			string text = _trackInSelectedPlaylist ? "Remove" : "Add";
-			var measured = TextRenderer.MeasureText(text, smallRegular, Size.Empty, TextFormatFlags.NoPadding);
-			int width = measured.Width + 10;
-			int height = PlaylistActionRowBounds.Height + 4;
-			return new Rectangle(widget.Right - width, PlaylistActionRowBounds.Y - 2, width, height);
+			var measured = MeasureLabel(text, smallRegular);
+			int width = measured.Width + SpacingUnit * 2;
+			int height = PlaylistActionRowBounds.Height + SpacingUnit;
+			return new Rectangle(widget.Right - width, PlaylistActionRowBounds.Y - SpacingUnit / 2, width, height);
 		}
 
 		/// <summary>
 		/// Small square button just left of the Add/Remove toggle, same height,
-		/// with a 6px gap between the two.
+		/// with a SpacingUnit gap between the two.
 		/// </summary>
 		private Rectangle RefreshButtonBounds(Rectangle widget)
 		{
 			var actionBounds = ActionButtonBounds(widget);
 			int size = actionBounds.Height;
-			return new Rectangle(actionBounds.X - 6 - size, actionBounds.Y, size, size);
+			return new Rectangle(actionBounds.X - SpacingUnit - size, actionBounds.Y, size, size);
 		}
 
 		private void DrawPlaylistDropdown(Graphics g)
 		{
 			var fg = panel.ForeColor;
 			var bounds = PlaylistDropdownBounds;
+			int rowHeight = DropdownRowHeight;
 
 			// Plain rectangle, same reasoning as the widget above - rounding is
 			// reserved for the +/- buttons specifically.
@@ -228,20 +270,20 @@ namespace MusicBeePlugin
 			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
 
 			int rowY = bounds.Y;
-			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, 18);
+			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
 			TextRenderer.DrawText(g, "Create Playlist", smallBold, createRect, fg,
 				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-			rowY += 18;
+			rowY += rowHeight;
 
 			if (_dropdownPlaylists != null)
 			{
 				foreach (var pl in _dropdownPlaylists)
 				{
-					var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, 18);
+					var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
 					var label = TruncateCached(pl.Name, smallRegular);
 					TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
 						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-					rowY += 18;
+					rowY += rowHeight;
 				}
 			}
 		}
@@ -260,7 +302,7 @@ namespace MusicBeePlugin
 				if (dropdown.Contains(clickPoint))
 				{
 					int relativeY = clickPoint.Y - dropdown.Y;
-					int rowIndex = relativeY / 18;
+					int rowIndex = relativeY / DropdownRowHeight;
 
 					_playlistDropdownOpen = false;
 
