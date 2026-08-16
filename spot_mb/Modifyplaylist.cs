@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -35,29 +34,6 @@ namespace MusicBeePlugin
 	/// </summary>
 	public partial class Plugin
 	{
-		/// <summary>
-		/// Builds a rounded-rectangle path, used only by the +/- action buttons below.
-		/// Kept local to this file rather than assuming a shared helper exists
-		/// elsewhere in the plugin.
-		/// </summary>
-		private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
-		{
-			int diameter = radius * 2;
-			var path = new GraphicsPath();
-			var arc = new Rectangle(bounds.Location, new Size(diameter, diameter));
-
-			path.AddArc(arc, 180, 90);
-			arc.X = bounds.Right - diameter;
-			path.AddArc(arc, 270, 90);
-			arc.Y = bounds.Bottom - diameter;
-			path.AddArc(arc, 0, 90);
-			arc.X = bounds.Left;
-			path.AddArc(arc, 90, 90);
-			path.CloseFigure();
-
-			return path;
-		}
-
 		private static bool _playlistDropdownOpen = false;
 		private static SimplePlaylist _selectedPlaylist = null;
 		private static bool _trackInSelectedPlaylist = false;
@@ -66,16 +42,15 @@ namespace MusicBeePlugin
 		private static bool _playlistActionInProgress = false; // guards +/- and Create against double-clicks
 
 		// --- Paint-time caches -------------------------------------------------
-		// DrawPlaylistWidget/DrawPlaylistDropdown/DrawRoundedIconButton used to
-		// new-up a Pen/SolidBrush/GraphicsPath on every single paint. These are
-		// cached instead and reused for the lifetime of the plugin. The set of
-		// distinct colors in play here is tiny (a handful of fixed alphas over
-		// whatever the current theme's fg/bg happen to be), so the cache stays
-		// small even across theme changes - it's a deliberate trade of a few
-		// never-disposed GDI handles for zero per-paint allocation.
+		// DrawPlaylistWidget/DrawPlaylistDropdown used to new-up a Pen/SolidBrush
+		// on every single paint. These are cached instead and reused for the
+		// lifetime of the plugin. The set of distinct colors in play here is tiny
+		// (a handful of fixed alphas over whatever the current theme's fg/bg
+		// happen to be), so the cache stays small even across theme changes -
+		// it's a deliberate trade of a few never-disposed GDI handles for zero
+		// per-paint allocation.
 		private static readonly Dictionary<int, Pen> _penCache = new Dictionary<int, Pen>();
 		private static readonly Dictionary<int, Brush> _brushCache = new Dictionary<int, Brush>();
-		private static GraphicsPath _iconButtonPath; // 18x18 rounded rect at the origin; positioned via TranslateTransform per button instead of rebuilt each time
 		private static readonly Dictionary<(string name, int panelWidth), string> _truncateCache = new Dictionary<(string, int), string>();
 
 		private static Pen GetPen(Color color)
@@ -98,18 +73,6 @@ namespace MusicBeePlugin
 				_brushCache[key] = brush;
 			}
 			return brush;
-		}
-
-		private static GraphicsPath GetIconButtonPath()
-		{
-			// Both callers (MinusButtonBounds/PlusButtonBounds) are fixed at 18x18,
-			// so a single cached path built at the origin and translated into place
-			// is safe. If either button size ever changes, this needs revisiting.
-			if (_iconButtonPath == null)
-			{
-				_iconButtonPath = RoundedRect(new Rectangle(0, 0, 18, 18), 5);
-			}
-			return _iconButtonPath;
 		}
 
 		/// <summary>
@@ -140,13 +103,15 @@ namespace MusicBeePlugin
 		}
 
 		// Corner widget geometry, computed fresh each paint against the current panel width.
-		private Rectangle PlaylistWidgetBounds => new Rectangle(panel.Width - 96, 4, 92, 16);
+		// Margins widened from the original 4px on top/right - it was reading as
+		// flush against the panel edges.
+		private Rectangle PlaylistWidgetBounds => new Rectangle(panel.Width - 100, 6, 92, 16);
 
-		// The +/- buttons now live on their own row beneath the name, with a
-		// small gap so they read as a distinct action row rather than crowding
-		// the name.
+		// Add/Remove now live on their own row beneath the name, with a small
+		// gap so they read as a distinct action row rather than crowding the
+		// name. Sized for plain smallRegular text now, not the old 18px icon boxes.
 		private Rectangle PlaylistActionRowBounds =>
-			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + 4, PlaylistWidgetBounds.Width, 18);
+			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + 6, PlaylistWidgetBounds.Width, 14);
 
 		private Rectangle PlaylistDropdownBounds
 		{
@@ -193,11 +158,12 @@ namespace MusicBeePlugin
 				TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
 					TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
-				bool canRemove = _playlistMembershipKnown && _trackInSelectedPlaylist;
-				bool canAdd = _playlistMembershipKnown && !_trackInSelectedPlaylist;
-
-				DrawRoundedIconButton(g, MinusButtonBounds(widget), "−", canRemove, fg);
-				DrawRoundedIconButton(g, PlusButtonBounds(widget), "+", canAdd, fg);
+				// Single toggle button - Remove when the track is already in the
+				// playlist, Add otherwise. Matches the Saved Track / Save Album
+				// pattern right below it, rather than showing two labels where
+				// only one is ever clickable.
+				string actionLabel = _trackInSelectedPlaylist ? "Remove" : "Add";
+				DrawActionButton(g, ActionButtonBounds(widget), actionLabel, _playlistMembershipKnown, fg);
 			}
 
 			if (_playlistDropdownOpen)
@@ -207,32 +173,33 @@ namespace MusicBeePlugin
 		}
 
 		/// <summary>
-		/// Draws one +/- action button: rounded badge background (filled + bordered
-		/// when active, faint when greyed out) with the glyph centered on top, all in
-		/// monochrome shades of the panel's own foreground color.
+		/// Draws the single Add/Remove toggle: bordered box (plain rectangle,
+		/// matching the name box's own border style above it) with the label
+		/// centered inside, dimmed while membership is still resolving.
 		/// </summary>
-		private void DrawRoundedIconButton(Graphics g, Rectangle bounds, string glyph, bool active, Color fg)
+		private void DrawActionButton(Graphics g, Rectangle bounds, string text, bool clickable, Color fg)
 		{
-			int fillAlpha = active ? 26 : 10;
-			int borderAlpha = active ? 70 : 25;
-			var glyphColor = active ? fg : Color.FromArgb(90, fg);
+			int borderAlpha = clickable ? 60 : 25;
+			var textColor = clickable ? fg : Color.FromArgb(90, fg);
 
-			var fillBrush = GetBrush(Color.FromArgb(fillAlpha, fg));
-			var borderPen = GetPen(Color.FromArgb(borderAlpha, fg));
-			var path = GetIconButtonPath();
-
-			var state = g.Save();
-			g.TranslateTransform(bounds.X, bounds.Y);
-			g.FillPath(fillBrush, path);
-			g.DrawPath(borderPen, path);
-			g.Restore(state);
-
-			TextRenderer.DrawText(g, glyph, iconFont, bounds, glyphColor,
-				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+			g.DrawRectangle(GetPen(Color.FromArgb(borderAlpha, fg)), bounds);
+			TextRenderer.DrawText(g, text, smallRegular, bounds, textColor,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 		}
 
-		private Rectangle MinusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 44, PlaylistActionRowBounds.Y, 18, 18);
-		private Rectangle PlusButtonBounds(Rectangle widget) => new Rectangle(widget.Right - 18, PlaylistActionRowBounds.Y, 18, 18);
+		/// <summary>
+		/// Right-aligned under the name, sized to whichever label ("Remove" is
+		/// wider than "Add") is currently showing, plus a little padding so the
+		/// border doesn't hug the text.
+		/// </summary>
+		private Rectangle ActionButtonBounds(Rectangle widget)
+		{
+			string text = _trackInSelectedPlaylist ? "Remove" : "Add";
+			var measured = TextRenderer.MeasureText(text, smallRegular, Size.Empty, TextFormatFlags.NoPadding);
+			int width = measured.Width + 10;
+			int height = PlaylistActionRowBounds.Height + 4;
+			return new Rectangle(widget.Right - width, PlaylistActionRowBounds.Y - 2, width, height);
+		}
 
 		private void DrawPlaylistDropdown(Graphics g)
 		{
@@ -242,7 +209,7 @@ namespace MusicBeePlugin
 			// Plain rectangle, same reasoning as the widget above - rounding is
 			// reserved for the +/- buttons specifically.
 			g.FillRectangle(GetBrush(panel.BackColor), bounds);
-			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
+			g.DrawRectangle(GetPen(Color.FromArgb(85, fg)), bounds);
 
 			int rowY = bounds.Y;
 			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, 18);
@@ -305,23 +272,20 @@ namespace MusicBeePlugin
 
 			if (_selectedPlaylist != null)
 			{
-				var minusHit = MinusButtonBounds(widget);
-				var plusHit = PlusButtonBounds(widget);
+				var actionHit = ActionButtonBounds(widget);
 
-				if (minusHit.Contains(clickPoint))
+				if (actionHit.Contains(clickPoint))
 				{
-					if (_playlistMembershipKnown && _trackInSelectedPlaylist)
+					if (_playlistMembershipKnown)
 					{
-						RemoveCurrentTrackFromSelectedPlaylist();
-					}
-					return true;
-				}
-
-				if (plusHit.Contains(clickPoint))
-				{
-					if (_playlistMembershipKnown && !_trackInSelectedPlaylist)
-					{
-						AddCurrentTrackToSelectedPlaylist();
+						if (_trackInSelectedPlaylist)
+						{
+							RemoveCurrentTrackFromSelectedPlaylist();
+						}
+						else
+						{
+							AddCurrentTrackToSelectedPlaylist();
+						}
 					}
 					return true;
 				}
