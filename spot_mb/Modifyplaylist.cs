@@ -164,6 +164,11 @@ namespace MusicBeePlugin
 				// only one is ever clickable.
 				string actionLabel = _trackInSelectedPlaylist ? "Remove" : "Add";
 				DrawActionButton(g, ActionButtonBounds(widget), actionLabel, _playlistMembershipKnown, fg);
+
+				// Manual re-check of membership for the current track, in case
+				// something changed the playlist from elsewhere (phone app, web
+				// player) since the last automatic check.
+				DrawActionButton(g, RefreshButtonBounds(widget), "\u21BB", _playlistMembershipKnown, fg);
 			}
 
 			if (_playlistDropdownOpen)
@@ -201,6 +206,17 @@ namespace MusicBeePlugin
 			return new Rectangle(widget.Right - width, PlaylistActionRowBounds.Y - 2, width, height);
 		}
 
+		/// <summary>
+		/// Small square button just left of the Add/Remove toggle, same height,
+		/// with a 6px gap between the two.
+		/// </summary>
+		private Rectangle RefreshButtonBounds(Rectangle widget)
+		{
+			var actionBounds = ActionButtonBounds(widget);
+			int size = actionBounds.Height;
+			return new Rectangle(actionBounds.X - 6 - size, actionBounds.Y, size, size);
+		}
+
 		private void DrawPlaylistDropdown(Graphics g)
 		{
 			var fg = panel.ForeColor;
@@ -209,7 +225,7 @@ namespace MusicBeePlugin
 			// Plain rectangle, same reasoning as the widget above - rounding is
 			// reserved for the +/- buttons specifically.
 			g.FillRectangle(GetBrush(panel.BackColor), bounds);
-			g.DrawRectangle(GetPen(Color.FromArgb(85, fg)), bounds);
+			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
 
 			int rowY = bounds.Y;
 			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, 18);
@@ -272,6 +288,13 @@ namespace MusicBeePlugin
 
 			if (_selectedPlaylist != null)
 			{
+				var refreshHit = RefreshButtonBounds(widget);
+				if (refreshHit.Contains(clickPoint))
+				{
+					RefreshCurrentPlaylistMembership();
+					return true;
+				}
+
 				var actionHit = ActionButtonBounds(widget);
 
 				if (actionHit.Contains(clickPoint))
@@ -385,6 +408,25 @@ namespace MusicBeePlugin
 
 			_playlistMembershipKnown = false;
 			_trackInSelectedPlaylist = false;
+			RefreshPanelUi();
+
+			_ = RefreshMembershipForCurrentTrackAsync(_selectedPlaylist);
+		}
+
+		/// <summary>
+		/// Manual re-check, triggered by the refresh button. Same mechanics as
+		/// OnPlaylistWidgetTrackChanged, just user-initiated instead of
+		/// track-change-initiated - useful if the playlist was edited from
+		/// somewhere else (phone app, web player) since the last automatic check.
+		/// </summary>
+		private void RefreshCurrentPlaylistMembership()
+		{
+			if (_selectedPlaylist == null)
+			{
+				return;
+			}
+
+			_playlistMembershipKnown = false;
 			RefreshPanelUi();
 
 			_ = RefreshMembershipForCurrentTrackAsync(_selectedPlaylist);
