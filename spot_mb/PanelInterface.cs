@@ -383,6 +383,14 @@ namespace MusicBeePlugin
 
         public async void ReceiveNotification(string sourceFileUrl, NotificationType type)
         {
+            // MusicBee can fire notifications (e.g. TrackChanged on startup, while
+            // restoring the last session) before OnDockablePanelCreated has run -
+            // panel is null until then. Bail out rather than crashing; the panel
+            // will pick up the current track on its own once it's actually created.
+            if (panel == null)
+            {
+                return;
+            }
 
             switch (type)
             {
