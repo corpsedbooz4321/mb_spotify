@@ -4,6 +4,18 @@ All notable changes to `mb_Spotify-Plugin` are documented here.
 
 ## 2026 — Aditya Sharma / Current Maintenance (Continued)
 
+### August 18, 2026 — Bug Fixes & Refactoring
+
+**Commits:** 
+- `40a9ae2` - Fix NullReferenceException on slow MusicBee startup (closes #1)
+- `b9dcbd2` - Removed junk created during Costura config and updated VS Code settings
+
+* Fixed critical NullReferenceException that occurred when MusicBee started slowly
+* Cleaned up build artifacts and configuration files created during Costura setup
+* Updated VS Code workspace settings for improved development experience
+
+---
+
 ### August 14, 2026 — UI Improvements & Performance Optimization
 
 **Commits:** `635b8db`, `e272206`, `504ff71`, `fa581b6`, `8684fd3`
