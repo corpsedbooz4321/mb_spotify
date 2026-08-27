@@ -366,9 +366,6 @@ namespace MusicBeePlugin
             }
         }
 
-        /// <summary>
-        /// Thread-safe accessor for DrawPanel to read the current cached artwork
-        /// without racing the background download/swap in LoadArtworkAsync.
         /// </summary>
         public static Bitmap GetCachedArtwork(string forImageUrl)
         {
@@ -380,12 +377,6 @@ namespace MusicBeePlugin
 
         public async Task<FullTrack> TrackSearch()
         {
-            // Claim a generation for this run. Every call to TrackSearch() - from a
-            // track change, from re-auth, from anywhere - gets its own increasing
-            // number. Whichever run finishes with the HIGHEST number belongs to the
-            // most recently requested track; any run that discovers a higher number
-            // exists by the time one of its awaits completes knows it has been
-            // superseded and bails out without touching shared state.
             long myGeneration = Interlocked.Increment(ref _searchGeneration);
 
             if (string.IsNullOrWhiteSpace(_searchTerm))
@@ -396,6 +387,13 @@ namespace MusicBeePlugin
                     _auth = 1;
                     RefreshPanelUi();
                 }
+                return null;
+            }
+
+            if (_spotify == null)
+            {
+                _trackMissing = 1;
+                RefreshPanelUi();
                 return null;
             }
 
