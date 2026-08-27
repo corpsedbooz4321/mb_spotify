@@ -383,10 +383,6 @@ namespace MusicBeePlugin
 
         public async void ReceiveNotification(string sourceFileUrl, NotificationType type)
         {
-            // MusicBee can fire notifications (e.g. TrackChanged on startup, while
-            // restoring the last session) before OnDockablePanelCreated has run -
-            // panel is null until then. Bail out rather than crashing; the panel
-            // will pick up the current track on its own once it's actually created.
             if (panel == null)
             {
                 return;
@@ -399,11 +395,7 @@ namespace MusicBeePlugin
 
                     _num = 0;
 
-                    // Read the tags for the NEW track first, and set _searchTerm
-                    // BEFORE calling TrackSearch(). Previously TrackSearch() was
-                    // called here using the stale _searchTerm from the prior track,
                     // then _searchTerm was updated and searched again - causing a
-                    // flash of the wrong (or no) result before the correct one loaded.
                     string title = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle);
                     string artist = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
 
@@ -418,13 +410,6 @@ namespace MusicBeePlugin
 
                     string newSearchTerm = title + " " + artist;
 
-                    // MusicBee can fire TrackChanged more than once for what is, from
-                    // the plugin's point of view, the same track (e.g. a metadata or
-                    // playback-state event arriving right after the track-id event).
-                    // If we already have a correctly displayed match for this exact
-                    // title+artist, searching again just creates another concurrent
-                    // TrackSearch() run for no reason - each one is safe on its own
-                    // thanks to the generation guard, but skipping the redundant call
                     // avoids the extra API traffic entirely.
                     if (newSearchTerm == _searchTerm && _trackMissing == 0)
                     {
