@@ -145,7 +145,7 @@
 
     <Copy
       SourceFiles="@(PluginFiles)"
-      DestinationFolder="C:\Users\mahia\Desktop\MusicBee\Plugins"
+      DestinationFolder="$(USERPROFILE)\Desktop\MusicBee\Plugins"
       SkipUnchangedFiles="true" />
 
   </Target>
