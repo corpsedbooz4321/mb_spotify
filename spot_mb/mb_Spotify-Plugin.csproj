@@ -125,7 +125,7 @@
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 
   <!--
-      Copy ONLY the final plugin DLL to MusicBee.
+      Copying ONLY the final plugin DLL to MusicBee.
 
       Costura/Fody embeds the required dependencies into
       mb_Spotify-Plugin.dll during the build.
