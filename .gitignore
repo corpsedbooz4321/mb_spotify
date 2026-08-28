@@ -99,6 +99,7 @@ fabric.properties
 mono_crash.*
 
 # Build results
+[Bb]uild/
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/
@@ -107,6 +108,7 @@ x64/
 x86/
 [Aa][Rr][Mm]/
 [Aa][Rr][Mm]64/
+[Pp]ackages/
 bld/
 [Bb]in/
 [Oo]bj/
