@@ -389,6 +389,13 @@ namespace MusicBeePlugin
                 }
                 return null;
             }
+            // A proper null check
+            if (_spotify == null)
+            {
+                _trackMissing = 1;
+                RefreshPanelUi();
+                return null;
+            }
 
             try
             {
