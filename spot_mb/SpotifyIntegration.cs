@@ -390,13 +390,6 @@ namespace MusicBeePlugin
                 return null;
             }
 
-            if (_spotify == null)
-            {
-                _trackMissing = 1;
-                RefreshPanelUi();
-                return null;
-            }
-
             try
             {
                 SearchResponse track;
