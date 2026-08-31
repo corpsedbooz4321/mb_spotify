@@ -277,14 +277,14 @@ namespace MusicBeePlugin
 
 			if (_dropdownPlaylistsCache != null)
 			{
-				// Already fetched this session - serve straight from cache, no round trip.
+				// Already fetched this session serve straight from cache no round work.
 				_dropdownPlaylists = _dropdownPlaylistsCache;
 				panel.Invalidate();
 				RefreshPanelUi();
 				return;
 			}
 
-			_dropdownPlaylists = null; // show just "Create Playlist" while this session's first fetch is in flight
+			_dropdownPlaylists = null; // show just "Create Playlist" while this session's first fetch is in progresss
 			panel.Invalidate();
 
 			try
@@ -359,7 +359,7 @@ namespace MusicBeePlugin
 			}
 
 			var myPlaylist = playlist;
-			var myTrackId = _trackID; // capture - a check for the old track finishing late must not overwrite a newer one's state
+			var myTrackId = _trackID; // capture a check for the old track finishing late must not overwrite a newer one state
 			string trackUri = "spotify:track:" + myTrackId;
 
 			try
