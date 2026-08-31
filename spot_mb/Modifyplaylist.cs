@@ -20,15 +20,32 @@ namespace MusicBeePlugin
 		private static List<SimplePlaylist> _dropdownPlaylists = null; // only populated while the dropdown is open
 		private static bool _playlistActionInProgress = false; // guards +/- and Create against double-clicks
 
+		private static readonly Dictionary<(string playlistId, string trackUri), bool> _localMembershipOverrides =
+			new Dictionary<(string, string), bool>();
+
+		private static readonly Dictionary<string, HashSet<string>> _playlistTrackUriCache =
+			new Dictionary<string, HashSet<string>>();
+		private static readonly Dictionary<string, DateTime> _playlistTrackUriCacheTimestamp =
+			new Dictionary<string, DateTime>();
+		private static readonly TimeSpan PlaylistTrackCacheTtl = TimeSpan.FromMinutes(5);
+
 		private static readonly Dictionary<int, Pen> _penCache = new Dictionary<int, Pen>();
 		private static readonly Dictionary<int, Brush> _brushCache = new Dictionary<int, Brush>();
 		private static readonly Dictionary<(string name, int panelWidth), string> _truncateCache = new Dictionary<(string, int), string>();
+
+		private const int MaxGdiCacheEntries = 64;
 
 		private static Pen GetPen(Color color)
 		{
 			int key = color.ToArgb();
 			if (!_penCache.TryGetValue(key, out var pen))
 			{
+				if (_penCache.Count > MaxGdiCacheEntries)
+				{
+					foreach (var p in _penCache.Values) p.Dispose();
+					_penCache.Clear();
+				}
+
 				pen = new Pen(color);
 				_penCache[key] = pen;
 			}
@@ -40,6 +57,12 @@ namespace MusicBeePlugin
 			int key = color.ToArgb();
 			if (!_brushCache.TryGetValue(key, out var brush))
 			{
+				if (_brushCache.Count > MaxGdiCacheEntries)
+				{
+					foreach (var b in _brushCache.Values) b.Dispose();
+					_brushCache.Clear();
+				}
+
 				brush = new SolidBrush(color);
 				_brushCache[key] = brush;
 			}
@@ -308,7 +331,6 @@ namespace MusicBeePlugin
 			{
 				mbApiInterface.MB_Trace("OpenPlaylistDropdown (fetch playlists) failed: " + ex.GetType().Name + " - " + ex.Message);
 				_dropdownPlaylists = new List<SimplePlaylist>();
-
 			}
 
 			RefreshPanelUi();
@@ -345,10 +367,22 @@ namespace MusicBeePlugin
 				return;
 			}
 
+			// Force both caches to refetch: the dropdown's playlist list, and
+			// this playlist's track-URI set (in case tracks were added/removed
+			// from elsewhere, e.g. Spotify's own app).
+			_dropdownPlaylistsCache = null;
+			InvalidatePlaylistTrackCache(_selectedPlaylist.Id);
+
 			_playlistMembershipKnown = false;
 			RefreshPanelUi();
 
 			_ = RefreshMembershipForCurrentTrackAsync(_selectedPlaylist);
+		}
+
+		private static void InvalidatePlaylistTrackCache(string playlistId)
+		{
+			_playlistTrackUriCache.Remove(playlistId);
+			_playlistTrackUriCacheTimestamp.Remove(playlistId);
 		}
 
 		private async Task RefreshMembershipForCurrentTrackAsync(SimplePlaylist playlist)
@@ -362,16 +396,42 @@ namespace MusicBeePlugin
 			var myTrackId = _trackID; // capture - a check for the old track finishing late must not overwrite a newer one's state
 			string trackUri = "spotify:track:" + myTrackId;
 
+			bool hasOverride = _localMembershipOverrides.TryGetValue((playlist.Id, trackUri), out bool overriddenState);
+			if (hasOverride)
+			{
+				// Show the optimistic state immediately - don't wait on the network.
+				_trackInSelectedPlaylist = overriddenState;
+				_playlistMembershipKnown = true;
+				RefreshPanelUi();
+			}
+
 			try
 			{
 				bool inPlaylist = await IsTrackInPlaylistAsync(playlist.Id, trackUri).ConfigureAwait(false);
 
 				if (!ReferenceEquals(_selectedPlaylist, myPlaylist) || _trackID != myTrackId)
 				{
+					// A newer track/playlist selection superseded this check.
 					return;
 				}
 
-				_trackInSelectedPlaylist = inPlaylist;
+				if (hasOverride)
+				{
+					if (overriddenState == inPlaylist)
+					{
+						_localMembershipOverrides.Remove((playlist.Id, trackUri));
+						_trackInSelectedPlaylist = inPlaylist;
+					}
+					else
+					{
+						_trackInSelectedPlaylist = overriddenState;
+					}
+				}
+				else
+				{
+					_trackInSelectedPlaylist = inPlaylist;
+				}
+
 				_playlistMembershipKnown = true;
 				RefreshPanelUi();
 			}
@@ -399,6 +459,25 @@ namespace MusicBeePlugin
 
 		private async Task<bool> IsTrackInPlaylistAsync(string playlistId, string trackUri)
 		{
+			if (_playlistTrackUriCache.TryGetValue(playlistId, out var cachedUris)
+				&& _playlistTrackUriCacheTimestamp.TryGetValue(playlistId, out var cachedAt)
+				&& DateTime.UtcNow - cachedAt < PlaylistTrackCacheTtl)
+			{
+				return cachedUris.Contains(trackUri);
+			}
+
+			var uris = await FetchAllPlaylistTrackUrisAsync(playlistId).ConfigureAwait(false);
+
+			_playlistTrackUriCache[playlistId] = uris;
+			_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
+
+			return uris.Contains(trackUri);
+		}
+
+		private async Task<HashSet<string>> FetchAllPlaylistTrackUrisAsync(string playlistId)
+		{
+			var uris = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
 			var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
 			{
 				Limit = 100,
@@ -415,21 +494,22 @@ namespace MusicBeePlugin
 					foreach (var entry in page.Items)
 					{
 						var fullTrack = ExtractFullTrack(entry);
-						if (fullTrack != null &&
-							string.Equals(fullTrack.Uri, trackUri, StringComparison.OrdinalIgnoreCase))
+						if (fullTrack?.Uri != null)
 						{
-							return true;
+							uris.Add(fullTrack.Uri);
 						}
 					}
 				}
 
 				if (string.IsNullOrEmpty(page?.Next))
 				{
-					return false;
+					break;
 				}
 
 				request.Offset = (request.Offset ?? 0) + (request.Limit ?? 100);
 			}
+
+			return uris;
 		}
 
 		private async void AddCurrentTrackToSelectedPlaylist()
@@ -442,8 +522,16 @@ namespace MusicBeePlugin
 
 			try
 			{
-				var request = new PlaylistAddItemsRequest(new List<string> { "spotify:track:" + _trackID });
+				string trackUri = "spotify:track:" + _trackID;
+				var request = new PlaylistAddItemsRequest(new List<string> { trackUri });
 				await _spotify.Playlists.AddItems(_selectedPlaylist.Id, request).ConfigureAwait(false);
+
+				_localMembershipOverrides[(_selectedPlaylist.Id, trackUri)] = true;
+
+				if (_playlistTrackUriCache.TryGetValue(_selectedPlaylist.Id, out var cachedUris))
+				{
+					cachedUris.Add(trackUri);
+				}
 
 				_trackInSelectedPlaylist = true;
 				_playlistMembershipKnown = true;
@@ -505,10 +593,18 @@ namespace MusicBeePlugin
 
 			try
 			{
-				bool removed = await RemoveTrackFromPlaylistViaRawApiAsync(_selectedPlaylist.Id, "spotify:track:" + _trackID).ConfigureAwait(false);
+				string trackUri = "spotify:track:" + _trackID;
+				bool removed = await RemoveTrackFromPlaylistViaRawApiAsync(_selectedPlaylist.Id, trackUri).ConfigureAwait(false);
 
 				if (removed)
 				{
+					_localMembershipOverrides[(_selectedPlaylist.Id, trackUri)] = false;
+
+					if (_playlistTrackUriCache.TryGetValue(_selectedPlaylist.Id, out var cachedUris))
+					{
+						cachedUris.Remove(trackUri);
+					}
+
 					_trackInSelectedPlaylist = false;
 					_playlistMembershipKnown = true;
 					RefreshPanelUi();
