@@ -16,9 +16,10 @@ namespace MusicBeePlugin
 		private static bool _playlistDropdownOpen = false;
 		private static SimplePlaylist _selectedPlaylist = null;
 		private static bool _trackInSelectedPlaylist = false;
-		private static bool _playlistMembershipKnown = false; // false while the live check is in flight
-		private static List<SimplePlaylist> _dropdownPlaylists = null; // only populated while the dropdown is open
-		private static bool _playlistActionInProgress = false; // guards +/- and Create against double-clicks
+		private static bool _playlistMembershipKnown = false;
+		private static List<SimplePlaylist> _dropdownPlaylists = null;
+		private static bool _playlistActionInProgress = false;
+		private static List<SimplePlaylist> _dropdownPlaylistsCache = null;
 
 		private static readonly Dictionary<(string playlistId, string trackUri), bool> _localMembershipOverrides =
 			new Dictionary<(string, string), bool>();
@@ -31,7 +32,8 @@ namespace MusicBeePlugin
 
 		private static readonly Dictionary<int, Pen> _penCache = new Dictionary<int, Pen>();
 		private static readonly Dictionary<int, Brush> _brushCache = new Dictionary<int, Brush>();
-		private static readonly Dictionary<(string name, int panelWidth), string> _truncateCache = new Dictionary<(string, int), string>();
+		private static readonly Dictionary<(string name, int panelWidth), string> _truncateCache =
+			new Dictionary<(string, int), string>();
 
 		private const int MaxGdiCacheEntries = 64;
 
@@ -89,9 +91,17 @@ namespace MusicBeePlugin
 
 		private Size MeasureLabel(string text, Font font)
 		{
-			using (var deviceContext = panel.CreateGraphics())
+			try
 			{
-				return TextRenderer.MeasureText(deviceContext, text, font, Size.Empty, TextFormatFlags.NoPadding);
+				using (var deviceContext = panel.CreateGraphics())
+				{
+					return TextRenderer.MeasureText(deviceContext, text, font, Size.Empty, TextFormatFlags.NoPadding);
+				}
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"MeasureLabel failed: {ex.GetType().Name} - {ex.Message}");
+				return Size.Empty;
 			}
 		}
 
@@ -106,9 +116,8 @@ namespace MusicBeePlugin
 			get
 			{
 				int height = PlaylistLabelSize.Height + SpacingUnit;
-				// playlist name, not just the collapsed-state word itself.
 				int width = PlaylistLabelSize.Width * 2;
-				int margin = SpacingUnit * 2; // inset from the panel's top/right edges
+				int margin = SpacingUnit * 2;
 				return new Rectangle(panel.Width - width - margin, margin, width, height);
 			}
 		}
@@ -121,7 +130,7 @@ namespace MusicBeePlugin
 		{
 			get
 			{
-				int rows = 1 + (_dropdownPlaylists?.Count ?? 0); // "Create Playlist" + playlists
+				int rows = 1 + (_dropdownPlaylists?.Count ?? 0);
 				int rowHeight = DropdownRowHeight;
 				int width = Math.Max(
 					MeasureLabel("Create Playlist", smallBold).Width + SpacingUnit * 4,
@@ -135,33 +144,40 @@ namespace MusicBeePlugin
 
 		private void DrawPlaylistWidget(Graphics g)
 		{
-			var fg = panel.ForeColor;
-			var widget = PlaylistWidgetBounds;
-
-			g.DrawRectangle(GetPen(Color.FromArgb(50, fg)), widget);
-
-			if (_selectedPlaylist == null)
+			try
 			{
-				TextRenderer.DrawText(g, "Playlist", smallRegular, widget, fg,
-					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+				var fg = panel.ForeColor;
+				var widget = PlaylistWidgetBounds;
+
+				g.DrawRectangle(GetPen(Color.FromArgb(50, fg)), widget);
+
+				if (_selectedPlaylist == null)
+				{
+					TextRenderer.DrawText(g, "Playlist", smallRegular, widget, fg,
+						TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+				}
+				else
+				{
+					var name = TruncateCached(_selectedPlaylist.Name, smallRegular);
+
+					var nameRect = new Rectangle(widget.X + SpacingUnit, widget.Y, widget.Width - SpacingUnit * 2, widget.Height);
+					TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
+						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+					string actionLabel = _trackInSelectedPlaylist ? "Remove" : "Add";
+					DrawActionButton(g, ActionButtonBounds(widget), actionLabel, _playlistMembershipKnown, fg);
+
+					DrawActionButton(g, RefreshButtonBounds(widget), "\u21BB", _playlistMembershipKnown, fg);
+				}
+
+				if (_playlistDropdownOpen)
+				{
+					DrawPlaylistDropdown(g);
+				}
 			}
-			else
+			catch (Exception ex)
 			{
-				var name = TruncateCached(_selectedPlaylist.Name, smallRegular);
-
-				var nameRect = new Rectangle(widget.X + SpacingUnit, widget.Y, widget.Width - SpacingUnit * 2, widget.Height);
-				TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
-					TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
-
-				string actionLabel = _trackInSelectedPlaylist ? "Remove" : "Add";
-				DrawActionButton(g, ActionButtonBounds(widget), actionLabel, _playlistMembershipKnown, fg);
-
-				DrawActionButton(g, RefreshButtonBounds(widget), "\u21BB", _playlistMembershipKnown, fg);
-			}
-
-			if (_playlistDropdownOpen)
-			{
-				DrawPlaylistDropdown(g);
+				mbApiInterface.MB_Trace($"DrawPlaylistWidget failed: {ex.GetType().Name} - {ex.Message}");
 			}
 		}
 
@@ -193,252 +209,217 @@ namespace MusicBeePlugin
 
 		private void DrawPlaylistDropdown(Graphics g)
 		{
-			var fg = panel.ForeColor;
-			var bounds = PlaylistDropdownBounds;
-			int rowHeight = DropdownRowHeight;
-
-			// Plain rectangle, same reasoning as the widget above - rounding is
-			// reserved for the +/- buttons specifically.
-			g.FillRectangle(GetBrush(panel.BackColor), bounds);
-			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
-
-			int rowY = bounds.Y;
-			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
-			TextRenderer.DrawText(g, "Create Playlist", smallBold, createRect, fg,
-				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-			rowY += rowHeight;
-
-			if (_dropdownPlaylists != null)
+			try
 			{
-				foreach (var pl in _dropdownPlaylists)
+				var fg = panel.ForeColor;
+				var bounds = PlaylistDropdownBounds;
+				int rowHeight = DropdownRowHeight;
+
+				g.FillRectangle(GetBrush(panel.BackColor), bounds);
+				g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
+
+				int rowY = bounds.Y;
+				var createRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
+				TextRenderer.DrawText(g, "Create Playlist", smallBold, createRect, fg,
+					TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
+				rowY += rowHeight;
+
+				if (_dropdownPlaylists != null)
 				{
-					var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
-					var label = TruncateCached(pl.Name, smallRegular);
-					TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
-						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-					rowY += rowHeight;
+					foreach (var pl in _dropdownPlaylists)
+					{
+						var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
+						var label = TruncateCached(pl.Name, smallRegular);
+						TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
+							TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
+						rowY += rowHeight;
+					}
 				}
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"DrawPlaylistDropdown failed: {ex.GetType().Name} - {ex.Message}");
 			}
 		}
 
 		private bool HandlePlaylistWidgetClick(Point clickPoint)
 		{
-			if (_playlistDropdownOpen)
+			try
 			{
-				var dropdown = PlaylistDropdownBounds;
-
-				if (dropdown.Contains(clickPoint))
+				if (_playlistDropdownOpen)
 				{
-					int relativeY = clickPoint.Y - dropdown.Y;
-					int rowIndex = relativeY / DropdownRowHeight;
+					var dropdown = PlaylistDropdownBounds;
+
+					if (dropdown.Contains(clickPoint))
+					{
+						int relativeY = clickPoint.Y - dropdown.Y;
+						int rowIndex = relativeY / DropdownRowHeight;
+
+						_playlistDropdownOpen = false;
+
+						if (rowIndex == 0)
+						{
+							OpenCreatePlaylistPrompt();
+						}
+						else if (_dropdownPlaylists != null && rowIndex - 1 < _dropdownPlaylists.Count)
+						{
+							SelectPlaylist(_dropdownPlaylists[rowIndex - 1]);
+						}
+
+						panel.Invalidate();
+						return true;
+					}
 
 					_playlistDropdownOpen = false;
-
-					if (rowIndex == 0)
-					{
-						OpenCreatePlaylistPrompt();
-					}
-					else if (_dropdownPlaylists != null && rowIndex - 1 < _dropdownPlaylists.Count)
-					{
-						SelectPlaylist(_dropdownPlaylists[rowIndex - 1]);
-					}
-
+					_dropdownPlaylists = null;
 					panel.Invalidate();
 					return true;
 				}
 
-				_playlistDropdownOpen = false;
-				_dropdownPlaylists = null;
-				panel.Invalidate();
-				return true;
-			}
-
-			var widget = PlaylistWidgetBounds;
-
-			if (_selectedPlaylist != null)
-			{
-				var refreshHit = RefreshButtonBounds(widget);
-				if (refreshHit.Contains(clickPoint))
+				var widget = PlaylistWidgetBounds;
+				if (widget.Contains(clickPoint))
 				{
-					RefreshCurrentPlaylistMembership();
-					return true;
-				}
-
-				var actionHit = ActionButtonBounds(widget);
-
-				if (actionHit.Contains(clickPoint))
-				{
-					if (_playlistMembershipKnown)
+					if (_selectedPlaylist == null)
 					{
-						if (_trackInSelectedPlaylist)
-						{
-							RemoveCurrentTrackFromSelectedPlaylist();
-						}
-						else
-						{
-							AddCurrentTrackToSelectedPlaylist();
-						}
+						_playlistDropdownOpen = true;
+						_ = LoadDropdownPlaylistsAsync();
+						panel.Invalidate();
+						return true;
 					}
-					return true;
-				}
-			}
 
-			if (widget.Contains(clickPoint))
-			{
-				OpenPlaylistDropdown();
-				return true;
-			}
-
-			return false;
-		}
-
-		private static List<SimplePlaylist> _dropdownPlaylistsCache = null;
-
-		private async void OpenPlaylistDropdown()
-		{
-			_playlistDropdownOpen = true;
-
-			if (_dropdownPlaylistsCache != null)
-			{
-				// Already fetched this session - serve straight from cache, no round trip.
-				_dropdownPlaylists = _dropdownPlaylistsCache;
-				panel.Invalidate();
-				RefreshPanelUi();
-				return;
-			}
-
-			_dropdownPlaylists = null; // show just "Create Playlist" while this session's first fetch is in flight
-			panel.Invalidate();
-
-			try
-			{
-				var page = await _spotify.Playlists.CurrentUsers().ConfigureAwait(false);
-				var first3 = new List<SimplePlaylist>();
-
-				if (page?.Items != null)
-				{
-					foreach (var pl in page.Items)
+					var actionBounds = ActionButtonBounds(widget);
+					if (actionBounds.Contains(clickPoint))
 					{
-						first3.Add(pl);
-						if (first3.Count >= 3) break;
+						if (_playlistMembershipKnown)
+						{
+							if (_trackInSelectedPlaylist)
+							{
+								_ = RemoveCurrentTrackFromSelectedPlaylistAsync();
+							}
+							else
+							{
+								_ = AddCurrentTrackToSelectedPlaylistAsync();
+							}
+						}
+						panel.Invalidate();
+						return true;
+					}
+
+					var refreshBounds = RefreshButtonBounds(widget);
+					if (refreshBounds.Contains(clickPoint) && _selectedPlaylist != null)
+					{
+						_ = RefreshMembershipForCurrentTrackAsync();
+						return true;
 					}
 				}
 
-				_dropdownPlaylistsCache = first3;
-				_dropdownPlaylists = first3;
+				return false;
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("OpenPlaylistDropdown (fetch playlists) failed: " + ex.GetType().Name + " - " + ex.Message);
-				_dropdownPlaylists = new List<SimplePlaylist>();
+				mbApiInterface.MB_Trace($"HandlePlaylistWidgetClick failed: {ex.GetType().Name} - {ex.Message}");
+				return false;
 			}
-
-			RefreshPanelUi();
 		}
 
 		private void SelectPlaylist(SimplePlaylist playlist)
 		{
-			_selectedPlaylist = playlist;
-			_playlistMembershipKnown = false;
-			_trackInSelectedPlaylist = false;
-			RefreshPanelUi();
-
-			_ = RefreshMembershipForCurrentTrackAsync(playlist);
-		}
-
-		private void OnPlaylistWidgetTrackChanged()
-		{
-			if (_selectedPlaylist == null)
-			{
-				return;
-			}
-
-			_playlistMembershipKnown = false;
-			_trackInSelectedPlaylist = false;
-			RefreshPanelUi();
-
-			_ = RefreshMembershipForCurrentTrackAsync(_selectedPlaylist);
-		}
-
-		private void RefreshCurrentPlaylistMembership()
-		{
-			if (_selectedPlaylist == null)
-			{
-				return;
-			}
-
-			// Force both caches to refetch: the dropdown's playlist list, and
-			// this playlist's track-URI set (in case tracks were added/removed
-			// from elsewhere, e.g. Spotify's own app).
-			_dropdownPlaylistsCache = null;
-			InvalidatePlaylistTrackCache(_selectedPlaylist.Id);
-
-			_playlistMembershipKnown = false;
-			RefreshPanelUi();
-
-			_ = RefreshMembershipForCurrentTrackAsync(_selectedPlaylist);
-		}
-
-		private static void InvalidatePlaylistTrackCache(string playlistId)
-		{
-			_playlistTrackUriCache.Remove(playlistId);
-			_playlistTrackUriCacheTimestamp.Remove(playlistId);
-		}
-
-		private async Task RefreshMembershipForCurrentTrackAsync(SimplePlaylist playlist)
-		{
-			if (string.IsNullOrWhiteSpace(_trackID))
-			{
-				return;
-			}
-
-			var myPlaylist = playlist;
-			var myTrackId = _trackID; // capture - a check for the old track finishing late must not overwrite a newer one's state
-			string trackUri = "spotify:track:" + myTrackId;
-
-			bool hasOverride = _localMembershipOverrides.TryGetValue((playlist.Id, trackUri), out bool overriddenState);
-			if (hasOverride)
-			{
-				// Show the optimistic state immediately - don't wait on the network.
-				_trackInSelectedPlaylist = overriddenState;
-				_playlistMembershipKnown = true;
-				RefreshPanelUi();
-			}
-
 			try
 			{
-				bool inPlaylist = await IsTrackInPlaylistAsync(playlist.Id, trackUri).ConfigureAwait(false);
-
-				if (!ReferenceEquals(_selectedPlaylist, myPlaylist) || _trackID != myTrackId)
-				{
-					// A newer track/playlist selection superseded this check.
-					return;
-				}
-
-				if (hasOverride)
-				{
-					if (overriddenState == inPlaylist)
-					{
-						_localMembershipOverrides.Remove((playlist.Id, trackUri));
-						_trackInSelectedPlaylist = inPlaylist;
-					}
-					else
-					{
-						_trackInSelectedPlaylist = overriddenState;
-					}
-				}
-				else
-				{
-					_trackInSelectedPlaylist = inPlaylist;
-				}
-
-				_playlistMembershipKnown = true;
-				RefreshPanelUi();
+				_selectedPlaylist = playlist;
+				_playlistMembershipKnown = false;
+				_trackInSelectedPlaylist = false;
+				_ = RefreshMembershipForCurrentTrackAsync();
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("RefreshMembershipForCurrentTrackAsync failed: " + ex.GetType().Name + " - " + ex.Message);
+				mbApiInterface.MB_Trace($"SelectPlaylist failed: {ex.GetType().Name} - {ex.Message}");
+			}
+		}
+
+		private async Task LoadDropdownPlaylistsAsync()
+		{
+			try
+			{
+				if (_dropdownPlaylistsCache != null)
+				{
+					_dropdownPlaylists = _dropdownPlaylistsCache;
+					panel.Invalidate();
+					return;
+				}
+
+				if (_spotify == null)
+				{
+					return;
+				}
+
+				var playlists = new List<SimplePlaylist>();
+				var request = new PlaylistCurrentUsersRequest { Limit = 50, Offset = 0 };
+
+				while (true)
+				{
+					var page = await _spotify.Playlists.CurrentUsers(request).ConfigureAwait(false);
+					if (page?.Items != null)
+					{
+						playlists.AddRange(page.Items);
+					}
+
+					if (string.IsNullOrEmpty(page?.Next))
+					{
+						break;
+					}
+
+					request.Offset = (request.Offset ?? 0) + (request.Limit ?? 50);
+				}
+
+				_dropdownPlaylistsCache = playlists;
+				_dropdownPlaylists = playlists;
+				panel?.Invalidate();
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"LoadDropdownPlaylistsAsync failed: {ex.GetType().Name} - {ex.Message}");
+			}
+		}
+
+		private async Task RefreshMembershipForCurrentTrackAsync()
+		{
+			try
+			{
+				if (_selectedPlaylist == null || string.IsNullOrWhiteSpace(_trackID))
+				{
+					return;
+				}
+
+				var myPlaylist = _selectedPlaylist;
+				var myTrackId = _trackID;
+
+				string trackUri = "spotify:track:" + _trackID;
+
+				if (_localMembershipOverrides.TryGetValue((myPlaylist.Id, trackUri), out var overriddenMembership))
+				{
+					_trackInSelectedPlaylist = overriddenMembership;
+					_playlistMembershipKnown = true;
+					RefreshPanelUi();
+					return;
+				}
+
+				_playlistMembershipKnown = false;
+				RefreshPanelUi();
+
+				bool inPlaylist = await IsTrackInPlaylistAsync(myPlaylist.Id, trackUri).ConfigureAwait(false);
+
 				if (ReferenceEquals(_selectedPlaylist, myPlaylist) && _trackID == myTrackId)
+				{
+					_trackInSelectedPlaylist = inPlaylist;
+					_playlistMembershipKnown = true;
+					RefreshPanelUi();
+				}
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"RefreshMembershipForCurrentTrackAsync failed: {ex.GetType().Name} - {ex.Message}");
+				if (ReferenceEquals(_selectedPlaylist, _selectedPlaylist) && _trackID == _trackID)
 				{
 					RefreshPanelUi();
 				}
@@ -459,65 +440,81 @@ namespace MusicBeePlugin
 
 		private async Task<bool> IsTrackInPlaylistAsync(string playlistId, string trackUri)
 		{
-			if (_playlistTrackUriCache.TryGetValue(playlistId, out var cachedUris)
-				&& _playlistTrackUriCacheTimestamp.TryGetValue(playlistId, out var cachedAt)
-				&& DateTime.UtcNow - cachedAt < PlaylistTrackCacheTtl)
+			try
 			{
-				return cachedUris.Contains(trackUri);
+				if (_playlistTrackUriCache.TryGetValue(playlistId, out var cachedUris)
+					&& _playlistTrackUriCacheTimestamp.TryGetValue(playlistId, out var cachedAt)
+					&& DateTime.UtcNow - cachedAt < PlaylistTrackCacheTtl)
+				{
+					return cachedUris.Contains(trackUri);
+				}
+
+				var uris = await FetchAllPlaylistTrackUrisAsync(playlistId).ConfigureAwait(false);
+
+				_playlistTrackUriCache[playlistId] = uris;
+				_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
+
+				return uris.Contains(trackUri);
 			}
-
-			var uris = await FetchAllPlaylistTrackUrisAsync(playlistId).ConfigureAwait(false);
-
-			_playlistTrackUriCache[playlistId] = uris;
-			_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
-
-			return uris.Contains(trackUri);
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
+				return false;
+			}
 		}
 
 		private async Task<HashSet<string>> FetchAllPlaylistTrackUrisAsync(string playlistId)
 		{
 			var uris = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-			var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
+			try
 			{
-				Limit = 100,
-				Offset = 0,
-				Fields = { "items(track(uri))", "next" }
-			};
-
-			while (true)
-			{
-				var page = await _spotify.Playlists.GetItems(playlistId, request).ConfigureAwait(false);
-
-				if (page?.Items != null)
+				var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
 				{
-					foreach (var entry in page.Items)
+					Limit = 100,
+					Offset = 0,
+					Fields = { "items(track(uri))", "next" }
+				};
+
+				while (true)
+				{
+					var page = await _spotify.Playlists.GetItems(playlistId, request).ConfigureAwait(false);
+
+					if (page?.Items != null)
 					{
-						var fullTrack = ExtractFullTrack(entry);
-						if (fullTrack?.Uri != null)
+						foreach (var entry in page.Items)
 						{
-							uris.Add(fullTrack.Uri);
+							var fullTrack = ExtractFullTrack(entry);
+							if (fullTrack?.Uri != null)
+							{
+								uris.Add(fullTrack.Uri);
+							}
 						}
 					}
-				}
 
-				if (string.IsNullOrEmpty(page?.Next))
-				{
-					break;
-				}
+					if (string.IsNullOrEmpty(page?.Next))
+					{
+						break;
+					}
 
-				request.Offset = (request.Offset ?? 0) + (request.Limit ?? 100);
+					request.Offset = (request.Offset ?? 0) + (request.Limit ?? 100);
+				}
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"FetchAllPlaylistTrackUrisAsync failed: {ex.GetType().Name} - {ex.Message}");
 			}
 
 			return uris;
 		}
 
-		private async void AddCurrentTrackToSelectedPlaylist()
+		private async Task AddCurrentTrackToSelectedPlaylistAsync()
 		{
 			if (_playlistActionInProgress || _selectedPlaylist == null || string.IsNullOrWhiteSpace(_trackID))
 			{
 				return;
 			}
+
 			_playlistActionInProgress = true;
 
 			try
@@ -539,7 +536,7 @@ namespace MusicBeePlugin
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("AddCurrentTrackToSelectedPlaylist failed: " + ex.GetType().Name + " - " + ex.Message);
+				mbApiInterface.MB_Trace($"AddCurrentTrackToSelectedPlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
 			}
 			finally
 			{
@@ -551,44 +548,53 @@ namespace MusicBeePlugin
 
 		private async Task<bool> RemoveTrackFromPlaylistViaRawApiAsync(string playlistId, string trackUri)
 		{
-			await _spotify.UserProfile.Current().ConfigureAwait(false);
-
-			var token = DeserializeConfig(_path, _rsaKey);
-			if (token == null || string.IsNullOrWhiteSpace(token.AccessToken))
+			try
 			{
-				mbApiInterface.MB_Trace("RemoveTrackFromPlaylistViaRawApiAsync: no access token available");
-				return false;
-			}
+				await _spotify.UserProfile.Current().ConfigureAwait(false);
 
-			var body = JsonConvert.SerializeObject(new
-			{
-				items = new[] { new { uri = trackUri } }
-			});
-
-			using (var request = new HttpRequestMessage(HttpMethod.Delete, $"https://api.spotify.com/v1/playlists/{playlistId}/items"))
-			{
-				request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
-				request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-
-				var response = await _rawApiHttpClient.SendAsync(request).ConfigureAwait(false);
-				var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-
-				if (!response.IsSuccessStatusCode)
+				var token = DeserializeConfig(_path, _rsaKey);
+				if (token == null || string.IsNullOrWhiteSpace(token.AccessToken))
 				{
-					mbApiInterface.MB_Trace($"RemoveTrackFromPlaylistViaRawApiAsync failed: {(int)response.StatusCode} {response.StatusCode} - {responseBody}");
+					mbApiInterface.MB_Trace("RemoveTrackFromPlaylistViaRawApiAsync: no access token available");
 					return false;
 				}
 
-				return true;
+				var body = JsonConvert.SerializeObject(new
+				{
+					items = new[] { new { uri = trackUri } }
+				});
+
+				using (var request = new HttpRequestMessage(HttpMethod.Delete, $"https://api.spotify.com/v1/playlists/{playlistId}/items"))
+				{
+					request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+					request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+					var response = await _rawApiHttpClient.SendAsync(request).ConfigureAwait(false);
+					var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+					if (!response.IsSuccessStatusCode)
+					{
+						mbApiInterface.MB_Trace($"RemoveTrackFromPlaylistViaRawApiAsync failed: {(int)response.StatusCode} {response.StatusCode} - {responseBody}");
+						return false;
+					}
+
+					return true;
+				}
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"RemoveTrackFromPlaylistViaRawApiAsync failed: {ex.GetType().Name} - {ex.Message}");
+				return false;
 			}
 		}
 
-		private async void RemoveCurrentTrackFromSelectedPlaylist()
+		private async Task RemoveCurrentTrackFromSelectedPlaylistAsync()
 		{
 			if (_playlistActionInProgress || _selectedPlaylist == null || string.IsNullOrWhiteSpace(_trackID))
 			{
 				return;
 			}
+
 			_playlistActionInProgress = true;
 
 			try
@@ -612,7 +618,7 @@ namespace MusicBeePlugin
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("RemoveCurrentTrackFromSelectedPlaylist failed: " + ex.GetType().Name + " - " + ex.Message);
+				mbApiInterface.MB_Trace($"RemoveCurrentTrackFromSelectedPlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
 			}
 			finally
 			{
@@ -622,41 +628,48 @@ namespace MusicBeePlugin
 
 		private void OpenCreatePlaylistPrompt()
 		{
-			using (var form = new Form
+			try
 			{
-				Text = "Create Playlist",
-				FormBorderStyle = FormBorderStyle.FixedDialog,
-				MaximizeBox = false,
-				MinimizeBox = false,
-				StartPosition = FormStartPosition.CenterParent,
-				ClientSize = new Size(300, 110)
-			})
-			{
-				var label = new Label { Left = 12, Top = 12, Width = 276, Text = "Playlist name:" };
-				var nameBox = new TextBox { Left = 12, Top = 34, Width = 276 };
-				var okButton = new Button { Text = "Create", Left = 132, Top = 70, Width = 75, DialogResult = DialogResult.OK };
-				var cancelButton = new Button { Text = "Cancel", Left = 213, Top = 70, Width = 75, DialogResult = DialogResult.Cancel };
-
-				okButton.Click += (s, e) =>
+				using (var form = new Form
 				{
-					if (string.IsNullOrWhiteSpace(nameBox.Text))
+					Text = "Create Playlist",
+					FormBorderStyle = FormBorderStyle.FixedDialog,
+					MaximizeBox = false,
+					MinimizeBox = false,
+					StartPosition = FormStartPosition.CenterParent,
+					ClientSize = new Size(300, 110)
+				})
+				{
+					var label = new Label { Left = 12, Top = 12, Width = 276, Text = "Playlist name:" };
+					var nameBox = new TextBox { Left = 12, Top = 34, Width = 276 };
+					var okButton = new Button { Text = "Create", Left = 132, Top = 70, Width = 75, DialogResult = DialogResult.OK };
+					var cancelButton = new Button { Text = "Cancel", Left = 213, Top = 70, Width = 75, DialogResult = DialogResult.Cancel };
+
+					okButton.Click += (s, e) =>
 					{
-						MessageBox.Show(form, "Please enter a name.", "Create Playlist");
-						form.DialogResult = DialogResult.None;
+						if (string.IsNullOrWhiteSpace(nameBox.Text))
+						{
+							MessageBox.Show(form, "Please enter a name.", "Create Playlist");
+							form.DialogResult = DialogResult.None;
+						}
+					};
+
+					form.Controls.Add(label);
+					form.Controls.Add(nameBox);
+					form.Controls.Add(okButton);
+					form.Controls.Add(cancelButton);
+					form.AcceptButton = okButton;
+					form.CancelButton = cancelButton;
+
+					if (form.ShowDialog() == DialogResult.OK)
+					{
+						_ = CreatePlaylistAsync(nameBox.Text.Trim());
 					}
-				};
-
-				form.Controls.Add(label);
-				form.Controls.Add(nameBox);
-				form.Controls.Add(okButton);
-				form.Controls.Add(cancelButton);
-				form.AcceptButton = okButton;
-				form.CancelButton = cancelButton;
-
-				if (form.ShowDialog() == DialogResult.OK)
-				{
-					_ = CreatePlaylistAsync(nameBox.Text.Trim());
 				}
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace($"OpenCreatePlaylistPrompt failed: {ex.GetType().Name} - {ex.Message}");
 			}
 		}
 
@@ -669,14 +682,13 @@ namespace MusicBeePlugin
 
 				_selectedPlaylist = null;
 				_playlistMembershipKnown = false;
-
 				_dropdownPlaylistsCache = null;
 
 				RefreshPanelUi();
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("CreatePlaylistAsync failed: " + ex.GetType().Name + " - " + ex.Message);
+				mbApiInterface.MB_Trace($"CreatePlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
 				MessageBox.Show("Couldn't create the playlist:\n" + ex.Message, "Spotify Plugin Error");
 			}
 		}
