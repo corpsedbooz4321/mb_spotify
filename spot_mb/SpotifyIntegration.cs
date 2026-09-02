@@ -11,8 +11,6 @@ using System.Net.Http;
 using System.Drawing;
 using System.Security.Cryptography;
 using Newtonsoft.Json;
-using System.Linq.Expressions; // Added for JSON serialization
-
 
 namespace MusicBeePlugin
 {
@@ -34,6 +32,12 @@ namespace MusicBeePlugin
         private static readonly object _artworkLock = new object();
         private static readonly HttpClient _artworkHttpClient = new HttpClient();
 
+        // Lock for thread-safe access to static state
+        private static readonly object _stateLock = new object();
+
+        private const int AUTH_PORT = 5000;
+        private const string AUTH_CALLBACK_PATH = "/callback";
+
         private void RefreshPanelUi()
         {
             try
@@ -47,8 +51,15 @@ namespace MusicBeePlugin
                 {
                     panel.BeginInvoke((MethodInvoker)(() =>
                     {
-                        mbApiInterface.MB_RefreshPanels();
-                        panel.Invalidate();
+                        try
+                        {
+                            mbApiInterface.MB_RefreshPanels();
+                            panel.Invalidate();
+                        }
+                        catch (Exception ex)
+                        {
+                            mbApiInterface.MB_Trace($"RefreshPanelUi invoke failed: {ex.GetType().Name} - {ex.Message}");
+                        }
                     }));
                 }
                 else
@@ -57,9 +68,9 @@ namespace MusicBeePlugin
                     panel.Invalidate();
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Ignore UI refresh failures so the plugin can continue.
+                mbApiInterface.MB_Trace($"RefreshPanelUi failed: {ex.GetType().Name} - {ex.Message}");
             }
         }
 
@@ -69,7 +80,6 @@ namespace MusicBeePlugin
             {
                 if (data == null) return;
 
-                // Serialize directly to JSON
                 string json = JsonConvert.SerializeObject(data, Newtonsoft.Json.Formatting.Indented);
                 using (StreamWriter file = new StreamWriter(path, false))
                 {
@@ -78,7 +88,8 @@ namespace MusicBeePlugin
             }
             catch (Exception e)
             {
-                System.Windows.Forms.MessageBox.Show("Error saving token file:\n" + e.Message, "Spotify Plugin Error");
+                mbApiInterface.MB_Trace($"SerializeConfig failed: {e.GetType().Name} - {e.Message}");
+                MessageBox.Show("Error saving token file:\n" + e.Message, "Spotify Plugin Error");
             }
         }
 
@@ -88,27 +99,25 @@ namespace MusicBeePlugin
             {
                 if (File.Exists(path))
                 {
-                    // Read and deserialize JSON token
                     string json = File.ReadAllText(path);
                     return JsonConvert.DeserializeObject<PKCETokenResponse>(json);
                 }
             }
             catch (Exception e)
             {
-                System.Windows.Forms.MessageBox.Show("Error reading token file:\n" + e.Message, "Spotify Plugin Error");
+                mbApiInterface.MB_Trace($"DeserializeConfig failed: {e.GetType().Name} - {e.Message}");
+                MessageBox.Show("Error reading token file:\n" + e.Message, "Spotify Plugin Error");
             }
             return null;
         }
 
-        async void SpotifyWebAuth()
+        private async Task SpotifyWebAuthAsync()
         {
             if (_authInProgress) return;
 
             if (string.IsNullOrWhiteSpace(_clientID))
             {
-                // No Client ID configured yet - nothing to authenticate against.
-                // The panel/menu should route the user to Configure() first;
-                // this is just a safety net.
+                mbApiInterface.MB_Trace("SpotifyWebAuthAsync: No Client ID configured");
                 return;
             }
 
@@ -116,653 +125,493 @@ namespace MusicBeePlugin
 
             try
             {
+                // Try to use saved token first
                 if (File.Exists(_path))
                 {
                     var token_response = DeserializeConfig(_path, _rsaKey);
                     if (token_response != null)
                     {
-                        var authenticator = new PKCEAuthenticator(_clientID, token_response, _path);
-
-                        var config = SpotifyClientConfig.CreateDefault()
-                            .WithAuthenticator(authenticator);
-                        _spotify = new SpotifyClient(config);
-
-                        // Verify token validity
                         try
                         {
-                            await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, "test"));
-                            _auth = 1;
-                            await TrackSearch();
-                            return; // Successfully authenticated from saved token!
+                            var authenticator = new PKCEAuthenticator(_clientID, token_response, _path);
+                            var config = SpotifyClientConfig.CreateDefault()
+                                .WithAuthenticator(authenticator);
+                            _spotify = new SpotifyClient(config);
+
+                            await _spotify.Search.Item(new SearchRequest(SearchRequest.Types.Track, "test")).ConfigureAwait(false);
+
+                            lock (_stateLock)
+                            {
+                                _auth = 1;
+                            }
+
+                            await TrackSearch().ConfigureAwait(false);
+                            RefreshPanelUi();
+                            return;
                         }
                         catch (APIException apiEx)
                         {
-                            _trackMissing = 1;
-                            _trackLIB = _albumLIB = _artistLIB = false;
-                            _auth = 1;
-
-                            var status = apiEx.Response?.StatusCode.ToString() ?? "unknown";
-                            var body = apiEx.Response?.Body ?? "(no body)";
-                            mbApiInterface.MB_Trace($"TrackSearch failed: APIException {status} - {body}");
-
+                            mbApiInterface.MB_Trace($"Saved token validation failed: {apiEx.Response?.StatusCode} - {apiEx.Message}");
+                            lock (_stateLock)
+                            {
+                                _trackMissing = 1;
+                                _trackLIB = _albumLIB = _artistLIB = false;
+                                _auth = 1;
+                            }
                             RefreshPanelUi();
                             return;
                         }
                     }
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Fallback to web auth if any startup checks fail
-            }
-            finally
-            {
-                if (_auth == 1)
-                {
-                    _authInProgress = false;
-                    RefreshPanelUi();
-                }
+                mbApiInterface.MB_Trace($"SpotifyWebAuthAsync token reload failed: {ex.GetType().Name} - {ex.Message}");
             }
 
-            if (_auth == 1) return;
-            //BrowserUtil OAuth flow
+            // Proceed with web auth
             bool browserOpened = false;
             try
             {
-
                 var (verifier, challenge) = PKCEUtil.GenerateCodes(120);
+                var callbackUri = new Uri($"http://127.0.0.1:{AUTH_PORT}{AUTH_CALLBACK_PATH}");
 
-                var loginRequest = new LoginRequest(
-                    new Uri("http://127.0.0.1:5000/callback"), _clientID, LoginRequest.ResponseType.Code)
+                var loginRequest = new LoginRequest(callbackUri, _clientID, LoginRequest.ResponseType.Code)
                 {
                     CodeChallengeMethod = "S256",
                     CodeChallenge = challenge,
                     Scope = new[] {
                         Scopes.UserLibraryModify, Scopes.UserFollowModify, Scopes.UserFollowRead, Scopes.UserLibraryRead,
                         Scopes.PlaylistModifyPrivate, Scopes.PlaylistModifyPublic, Scopes.PlaylistReadPrivate
-                        }
+                    }
                 };
                 var uri = loginRequest.ToUri();
 
-                var server = new EmbedIOAuthServer(new Uri("http://127.0.0.1:5000/callback"), 5000);
+                var server = new EmbedIOAuthServer(callbackUri, AUTH_PORT);
 
-                await server.Start(); // to start the server so it can listen to the callback.//
+                await server.Start().ConfigureAwait(false);
+                browserOpened = true;
 
                 server.PkceReceived += async (sender, response) =>
                 {
                     if (_codeExchanged) return;
                     _codeExchanged = true;
 
-                    await server.Stop();
+                    await server.Stop().ConfigureAwait(false);
                     try
                     {
                         var initialResponse = await new OAuthClient().RequestToken(
-                            new PKCETokenRequest(_clientID, response.Code, server.BaseUri, verifier)
-                        );
+                            new PKCETokenRequest(_clientID, response.Code, callbackUri, verifier)
+                        ).ConfigureAwait(false);
 
                         var authenticator = new PKCEAuthenticator(_clientID, initialResponse, _path);
-
                         var config = SpotifyClientConfig.CreateDefault()
                             .WithAuthenticator(authenticator);
                         _spotify = new SpotifyClient(config);
 
-                        var me = await _spotify.UserProfile.Current();
+                        var me = await _spotify.UserProfile.Current().ConfigureAwait(false);
 
-                        // Save JSON token cleanly
                         SerializeConfig(initialResponse, _path, _rsaKey);
-                        _auth = 1;
 
-                        _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
-                                    + " "
-                                    + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
-
-                        panel.BeginInvoke((Action)(async () =>
+                        lock (_stateLock)
                         {
-                            _authInProgress = false;
-                            mbApiInterface.MB_RefreshPanels();
-                            panel.Invalidate();
+                            _auth = 1;
+                            _searchTerm = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle)
+                                        + " "
+                                        + mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
+                        }
 
-                            try
+                        if (panel != null)
+                        {
+                            panel.BeginInvoke((Action)(async () =>
                             {
-                                await TrackSearch();
-                            }
-                            catch (APIException ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Search error: {ex.Message}");
-                                mbApiInterface.MB_Trace("TrackSearch (post-auth) failed: " + ex.GetType().Name + " - " + ex.Message);
-                            }
-                        }));
+                                try
+                                {
+                                    _authInProgress = false;
+                                    mbApiInterface.MB_RefreshPanels();
+                                    await TrackSearch().ConfigureAwait(false);
+                                    panel.Invalidate();
+                                }
+                                catch (Exception ex)
+                                {
+                                    mbApiInterface.MB_Trace($"Post-auth TrackSearch failed: {ex.GetType().Name} - {ex.Message}");
+                                }
+                            }));
+                        }
                     }
                     catch (Exception ex)
                     {
+                        mbApiInterface.MB_Trace($"Token exchange failed: {ex.GetType().Name} - {ex.Message}");
+                        MessageBox.Show("Authentication failed:\n" + ex.Message, "Spotify Plugin Error");
                         _authInProgress = false;
-                        System.Diagnostics.Debug.WriteLine($"OAuth callback failed: {ex.Message}");
-
-                        //making the faiure being displayed and unlockk the paned instead of failing silently
-                        panel.BeginInvoke((Action)(() =>
-                        {
-                            panel.Invalidate();
-                            MessageBox.Show("Spotify authentication failed:\n" + ex.Message, "Spotify Plugin Error");
-                        }));
+                        RefreshPanelUi();
                     }
                 };
 
-                try
-                {
-                    BrowserUtil.Open(uri);
-                    browserOpened = true;
-                }
-                catch (Exception)
-                {
-                    Console.WriteLine("Unable to open URL, manually open: {0}", uri);
-                }
-            }
-            catch (System.Net.WebException)
-            {
-                _auth = 0;
+                System.Diagnostics.Process.Start(uri.ToString());
             }
             catch (Exception ex)
             {
-                _auth = 0;
+                mbApiInterface.MB_Trace($"SpotifyWebAuthAsync failed: {ex.GetType().Name} - {ex.Message}");
                 _authInProgress = false;
-                Console.WriteLine("Auth error: " + ex.Message);
-                mbApiInterface.MB_RefreshPanels();
-                panel.Invalidate();
-                return;
-            }
-            if (!browserOpened)
-            {
-                //browserOpened never launched, nothing pending - CloseReason the flag
-                _authInProgress = false;
-                mbApiInterface.MB_RefreshPanels();
-                panel.Invalidate();
-            }
-        }
-        private static bool IsCurrentSearch(long generation)
-        {
-            return Interlocked.Read(ref _searchGeneration) == generation;
-        }
-
-        private async Task LoadArtworkAsync(string imageUrl, long generation)
-        {
-            if (string.IsNullOrWhiteSpace(imageUrl))
-            {
-                return;
-            }
-
-            // Already cached for this exact URL - nothing to do.
-            lock (_artworkLock)
-            {
-                if (_cachedArtworkUrl == imageUrl && _cachedArtwork != null)
-                {
-                    return;
-                }
-            }
-
-            try
-            {
-                byte[] data = await _artworkHttpClient.GetByteArrayAsync(imageUrl).ConfigureAwait(false);
-
-                if (!IsCurrentSearch(generation))
-                {
-                    return;
-                }
-
-                using (var rawImage = System.Drawing.Image.FromStream(new MemoryStream(data)))
-                {
-                    var resized = new Bitmap(rawImage, new Size(65, 65));
-
-                    lock (_artworkLock)
-                    {
-                        _cachedArtwork?.Dispose();
-                        _cachedArtwork = resized;
-                        _cachedArtworkUrl = imageUrl;
-                    }
-                }
-
-                if (IsCurrentSearch(generation))
-                {
-                    RefreshPanelUi();
-                }
-            }
-            catch (Exception ex)
-            {
-                mbApiInterface.MB_Trace("LoadArtworkAsync failed: " + ex.GetType().Name + " - " + ex.Message);
-            }
-        }
-
-        public static Bitmap GetCachedArtwork(string forImageUrl)
-        {
-            lock (_artworkLock)
-            {
-                return (_cachedArtworkUrl == forImageUrl) ? _cachedArtwork : null;
-            }
-        }
-
-        public async Task<FullTrack> TrackSearch()
-        {
-            long myGeneration = Interlocked.Increment(ref _searchGeneration);
-
-            if (string.IsNullOrWhiteSpace(_searchTerm))
-            {
-                if (IsCurrentSearch(myGeneration))
-                {
-                    _trackMissing = 1;
-                    _auth = 1;
-                    RefreshPanelUi();
-                }
-                return null;
-            }
-            // A proper null check
-            if (_spotify == null)
-            {
-                _trackMissing = 1;
+                MessageBox.Show("Authentication failed:\n" + ex.Message, "Spotify Plugin Error");
                 RefreshPanelUi();
-                return null;
             }
+        }
 
+        private async Task TrackSearch()
+        {
             try
             {
-                SearchResponse track;
-
-                if (_searchCache.TryGetValue(_searchTerm, out var cachedTrack))
+                if (_spotify == null || string.IsNullOrWhiteSpace(_searchTerm))
                 {
-                    track = cachedTrack;
+                    return;
+                }
+
+                var currentGeneration = ++_searchGeneration;
+
+                SearchResponse searchResponse;
+                if (_searchCache.TryGetValue(_searchTerm, out var cached))
+                {
+                    searchResponse = cached;
                 }
                 else
                 {
-                    track = await _spotify.Search.Item(
-                        new SearchRequest(SearchRequest.Types.Track, _searchTerm)
-                    );
+                    var request = new SearchRequest(SearchRequest.Types.Track, _searchTerm) { Limit = 1 };
+                    searchResponse = await _spotify.Search.Item(request).ConfigureAwait(false);
 
-                    if (track?.Tracks?.Items != null && track.Tracks.Items.Count > 0)
+                    if (_searchCache.Count > MaxSearchCacheEntries)
                     {
-                        _searchCache[_searchTerm] = track;
+                        _searchCache.Clear();
+                    }
+                    _searchCache.TryAdd(_searchTerm, searchResponse);
+                }
 
-                        // Simple cap so a long listening session doesn't grow this
-                        // unbounded. Not true LRU, just a coarse size limit.
-                        if (_searchCache.Count > MaxSearchCacheEntries)
+                if (currentGeneration != _searchGeneration)
+                {
+                    return; // A newer search started, ignore this result
+                }
+
+                if (searchResponse?.Tracks?.Items?.Count > 0)
+                {
+                    var track = searchResponse.Tracks.Items[0];
+
+                    lock (_stateLock)
+                    {
+                        _trackID = track.Id;
+                        _title = track.Name ?? "";
+                        _artist = string.Join(", ", track.Artists?.Select(a => a.Name) ?? new List<string>());
+                        _album = track.Album?.Name ?? "";
+                        _imageURL = track.Album?.Images?.FirstOrDefault()?.Url;
+                        _albumID = track.Album?.Id ?? "";
+                        _artistID = track.Artists?.FirstOrDefault()?.Id ?? "";
+                        _trackMissing = 0;
+                        _num = 0;
+                    }
+
+                    await CheckLibraryAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    lock (_stateLock)
+                    {
+                        _trackMissing = 1;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"TrackSearch failed: {ex.GetType().Name} - {ex.Message}");
+                lock (_stateLock)
+                {
+                    _trackMissing = 1;
+                }
+            }
+            finally
+            {
+                RefreshPanelUi();
+            }
+        }
+
+        private async Task CheckLibraryAsync()
+        {
+            try
+            {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_trackID))
+                {
+                    return;
+                }
+
+                var trackRequest = new LibraryCheckTracksRequest(new List<string> { _trackID });
+                var trackResults = await _spotify.Library.CheckTracks(trackRequest).ConfigureAwait(false);
+
+                var albumRequest = new LibraryCheckAlbumsRequest(new List<string> { _albumID });
+                var albumResults = await _spotify.Library.CheckAlbums(albumRequest).ConfigureAwait(false);
+
+                var artistRequest = new FollowCheckCurrentUserRequest(FollowCheckCurrentUserRequest.Type.Artist, new List<string> { _artistID });
+                var artistResults = await _spotify.Follow.CheckCurrentUser(artistRequest).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _trackLIB = trackResults?.Count > 0 && trackResults[0];
+                    _albumLIB = albumResults?.Count > 0 && albumResults[0];
+                    _artistLIB = artistResults?.Count > 0 && artistResults[0];
+                }
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"CheckLibraryAsync failed: {ex.GetType().Name} - {ex.Message}");
+            }
+        }
+
+        private Bitmap GetCachedArtwork(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return null;
+            }
+
+            lock (_artworkLock)
+            {
+                if (url == _cachedArtworkUrl && _cachedArtwork != null)
+                {
+                    return _cachedArtwork;
+                }
+            }
+
+            _ = FetchArtworkAsync(url);
+            return null;
+        }
+
+        private async Task FetchArtworkAsync(string url)
+        {
+            try
+            {
+                using (var response = await _artworkHttpClient.GetAsync(url).ConfigureAwait(false))
+                {
+                    if (response.IsSuccessStatusCode)
+                    {
+                        using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                         {
-                            var oldestKey = _searchCache.Keys.FirstOrDefault();
-                            if (oldestKey != null)
+                            var bitmap = new Bitmap(stream);
+                            lock (_artworkLock)
                             {
-                                _searchCache.TryRemove(oldestKey, out _);
+                                _cachedArtwork?.Dispose();
+                                _cachedArtwork = bitmap;
+                                _cachedArtworkUrl = url;
                             }
+                            RefreshPanelUi();
                         }
                     }
                 }
-
-                if (!IsCurrentSearch(myGeneration))
-                {
-                    return null;
-                }
-
-                if (track?.Tracks?.Items == null || track.Tracks.Items.Count == 0)
-                {
-                    _title = _artist = _album = null;
-                    _trackID = _albumID = _artistID = _imageURL = null;
-                    _trackMissing = 1;
-                    _trackLIB = _albumLIB = _artistLIB = false;
-                    _auth = 1;
-                    RefreshPanelUi();
-                    return null;
-                }
-
-                if (_num < 0 || _num >= track.Tracks.Items.Count)
-                {
-                    _num = 0;
-                }
-
-                var item = track.Tracks.Items[_num];
-
-                _title = Truncate(
-                    item.Name,
-                    largeBold
-                );
-
-                _artist = Truncate(
-                    string.Join(
-                        ", ",
-                     from artistItem in item.Artists
-                     select artistItem.Name
-                    ),
-                    smallRegular
-                );
-
-                _album = Truncate(
-                   item.Album.Name,
-                 smallRegular
-                );
-
-                _trackID = item.Id;
-                _albumID = item.Album.Id;
-                _artistID = item.Artists.Count > 0 ? item.Artists[0].Id : null;
-                _imageURL = (item.Album.Images != null && item.Album.Images.Count > 0)
-                    ? item.Album.Images[0].Url
-                    : null;
-
-                _trackMissing = 0;
-                _auth = 1;
-                OnPlaylistWidgetTrackChanged();
-                RefreshPanelUi();
-
-                _ = LoadArtworkAsync(_imageURL, myGeneration);
-
-                try
-                {
-                    if (!IsCurrentSearch(myGeneration)) return null;
-
-                    var tracks = new LibraryCheckTracksRequest(new List<string> { "spotify:track:" + _trackID });
-                    var albums = new LibraryCheckAlbumsRequest(new List<string> { _albumID });
-                    var artist = new FollowCheckCurrentUserRequest(
-                        FollowCheckCurrentUserRequest.Type.Artist,
-                        new List<string> { _artistID }
-                    );
-
-                    async Task<bool> SafeCheckTracks()
-                    {
-                        try { return (await _spotify.Library.CheckTracks(tracks))[0]; }
-                        catch (Exception ex)
-                        {
-                            mbApiInterface.MB_Trace("TrackSearch (CheckTracks) failed: " + ex.GetType().Name + " - " + ex.Message);
-                            return false;
-                        }
-                    }
-
-                    async Task<bool> SafeCheckAlbums()
-                    {
-                        try { return (await _spotify.Library.CheckAlbums(albums))[0]; }
-                        catch (Exception ex)
-                        {
-                            mbApiInterface.MB_Trace("TrackSearch (CheckAlbums) failed: " + ex.GetType().Name + " - " + ex.Message);
-                            return false;
-                        }
-                    }
-
-                    async Task<bool> SafeCheckArtist()
-                    {
-                        try { return (await _spotify.Follow.CheckCurrentUser(artist))[0]; }
-                        catch (Exception ex)
-                        {
-                            mbApiInterface.MB_Trace("TrackSearch (CheckCurrentUser) failed: " + ex.GetType().Name + " - " + ex.Message);
-                            return false;
-                        }
-                    }
-
-                    var trackTask = SafeCheckTracks();
-                    var albumTask = SafeCheckAlbums();
-                    var artistTask = SafeCheckArtist();
-
-                    await Task.WhenAll(trackTask, albumTask, artistTask);
-
-                    bool trackSaved = trackTask.Result;
-                    bool albumSaved = albumTask.Result;
-                    bool artistFollowed = artistTask.Result;
-
-                    if (!IsCurrentSearch(myGeneration)) return null;
-
-                    _trackLIB = trackSaved;
-                    _albumLIB = albumSaved;
-                    _artistLIB = artistFollowed;
-                    RefreshPanelUi();
-                }
-                catch (Exception ex)
-                {
-                    if (IsCurrentSearch(myGeneration))
-                    {
-                        mbApiInterface.MB_Trace("TrackSearch (library check) failed: " + ex.GetType().Name + " - " + ex.Message);
-                        RefreshPanelUi();
-                    }
-                }
-
-                return null;
-            }
-            catch (APIException apiEx)
-            {
-                if (IsCurrentSearch(myGeneration))
-                {
-                    _trackMissing = 1;
-                    _trackLIB = _albumLIB = _artistLIB = false;
-                    _auth = 1;
-
-                    var status = apiEx.Response?.StatusCode.ToString() ?? "unknown";
-                    var body = apiEx.Response?.Body ?? "(no body)";
-                    mbApiInterface.MB_Trace($"TrackSearch (search) failed: APIException {status} - {body}");
-
-                    RefreshPanelUi();
-                }
-                return null;
             }
             catch (Exception ex)
             {
-                if (IsCurrentSearch(myGeneration))
-                {
-                    _trackMissing = 1;
-                    _trackLIB = _albumLIB = _artistLIB = false;
-                    _auth = 1;
-
-                    mbApiInterface.MB_Trace("TrackSearch (search) failed: " + ex.GetType().Name + " - " + ex.Message);
-
-                    RefreshPanelUi();
-                }
-                return null;
+                mbApiInterface.MB_Trace($"FetchArtworkAsync failed: {ex.GetType().Name} - {ex.Message}");
             }
         }
 
-        public async void SaveTrack()
+        public async Task SaveTrackAsync()
         {
             try
             {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_trackID))
+                {
+                    return;
+                }
+
                 var track = new LibrarySaveTracksRequest(new List<string> { _trackID });
-                await _spotify.Library.SaveTracks(track);
-                _trackLIB = true;
+                await _spotify.Library.SaveTracks(track).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _trackLIB = true;
+                }
                 RefreshPanelUi();
             }
-            catch (APIUnauthorizedException e)
+            catch (APIUnauthorizedException ex)
             {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
+                mbApiInterface.MB_Trace($"SaveTrackAsync - Unauthorized: {ex.Message}");
+                MessageBox.Show("Authentication expired. Please re-authenticate.", "Spotify Plugin Error");
             }
-            catch (APIException e)
+            catch (APIException ex)
             {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-            }
-        }
-
-        public async void SaveAlbum()
-        {
-            try
-            {
-                var album = new LibrarySaveAlbumsRequest(new List<string> { _albumID });
-                await _spotify.Library.SaveAlbums(album);
-                _albumLIB = true;
-                RefreshPanelUi();
-            }
-            catch (APIUnauthorizedException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (APIException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-            }
-        }
-
-        public async void FollowArtist()
-        {
-            try
-            {
-                var artist = new FollowRequest(FollowRequest.Type.Artist, new List<string> { _artistID });
-                await _spotify.Follow.Follow(artist);
-                _artistLIB = true;
-                RefreshPanelUi();
-            }
-            catch (APIUnauthorizedException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (APIException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-            }
-        }
-
-        public async void RemoveTrack()
-        {
-            try
-            {
-                var track = new LibraryRemoveTracksRequest(new List<string> { _trackID });
-                await _spotify.Library.RemoveTracks(track);
-                _trackLIB = false;
-                RefreshPanelUi();
-            }
-            catch (APIUnauthorizedException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (APIException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-            }
-        }
-
-        public async void RemoveAlbum()
-        {
-            try
-            {
-                var album = new LibraryRemoveAlbumsRequest(new List<string> { _albumID });
-                await _spotify.Library.RemoveAlbums(album);
-                _albumLIB = false;
-                RefreshPanelUi();
-            }
-            catch (APIUnauthorizedException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (APIException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-            }
-        }
-
-        public async void UnfollowArtist()
-        {
-            try
-            {
-                var artist = new UnfollowRequest(UnfollowRequest.Type.Artist, new List<string> { _artistID });
-                await _spotify.Follow.Unfollow(artist);
-                _artistLIB = false;
-                RefreshPanelUi();
-            }
-            catch (APIUnauthorizedException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (APIException e)
-            {
-                Console.WriteLine("Error Status: " + e.Response);
-                Console.WriteLine("Error Msg: " + e.Message);
-            }
-            catch (System.ArgumentOutOfRangeException)
-            {
-                Console.WriteLine("Song not found!");
-            }
-        }
-
-        public Boolean CheckTrack(string id)
-        {
-            MessageBox.Show("CHECK TRACK: " + id);
-
-            var tracks = new LibraryCheckTracksRequest(
-                new List<String> { "spotify:track:" + id }
-                );
-
-            try
-            {
-                var result = _spotify.Library.CheckTracks(tracks).Result;
-
-                MessageBox.Show(
-                    "CHECK TRACK RESULT\n\n" +
-                    "Count: " + result.Count + "\n" +
-                    "Saved: " + result[0]
-                );
-
-                _trackLIB = result[0];
-                return result[0];
+                mbApiInterface.MB_Trace($"SaveTrackAsync - API Error: {ex.Response?.StatusCode} - {ex.Message}");
+                MessageBox.Show("Failed to save track: " + ex.Message, "Spotify Plugin Error");
             }
             catch (Exception ex)
             {
-                MessageBox.Show(
-                    "CHECK TRACK ERROR\n\n" +
-                    ex.GetType().FullName + "\n\n" +
-                    ex.Message
-                );
-
-                throw;
+                mbApiInterface.MB_Trace($"SaveTrackAsync failed: {ex.GetType().Name} - {ex.Message}");
             }
         }
 
-        public Boolean CheckAlbum(string id)
+        public async Task SaveAlbumAsync()
         {
-            var albums = new LibraryCheckAlbumsRequest(new List<String> { id });
+            try
+            {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_albumID))
+                {
+                    return;
+                }
 
-            List<bool> albumsSaved = _spotify.Library.CheckAlbums(albums).Result;
-            if (albumsSaved.ElementAt(0))
-            {
-                _albumLIB = true;
-                return true;
+                var album = new LibrarySaveAlbumsRequest(new List<string> { _albumID });
+                await _spotify.Library.SaveAlbums(album).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _albumLIB = true;
+                }
+                RefreshPanelUi();
             }
-            else
+            catch (APIUnauthorizedException ex)
             {
-                _albumLIB = false;
-                return false;
+                mbApiInterface.MB_Trace($"SaveAlbumAsync - Unauthorized: {ex.Message}");
+                MessageBox.Show("Authentication expired. Please re-authenticate.", "Spotify Plugin Error");
+            }
+            catch (APIException ex)
+            {
+                mbApiInterface.MB_Trace($"SaveAlbumAsync - API Error: {ex.Response?.StatusCode} - {ex.Message}");
+                MessageBox.Show("Failed to save album: " + ex.Message, "Spotify Plugin Error");
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"SaveAlbumAsync failed: {ex.GetType().Name} - {ex.Message}");
             }
         }
 
-        public Boolean CheckArtist(string id)
+        public async Task FollowArtistAsync()
         {
-            var artist = new FollowCheckCurrentUserRequest(FollowCheckCurrentUserRequest.Type.Artist, new List<string> { id });
+            try
+            {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_artistID))
+                {
+                    return;
+                }
 
-            List<bool> artistFollowed = _spotify.Follow.CheckCurrentUser(artist).Result;
-            if (artistFollowed.ElementAt(0))
-            {
-                _artistLIB = true;
-                return true;
+                var artist = new FollowRequest(FollowRequest.Type.Artist, new List<string> { _artistID });
+                await _spotify.Follow.Follow(artist).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _artistLIB = true;
+                }
+                RefreshPanelUi();
             }
-            else
+            catch (APIUnauthorizedException ex)
             {
-                _artistLIB = false;
-                return false;
+                mbApiInterface.MB_Trace($"FollowArtistAsync - Unauthorized: {ex.Message}");
+                MessageBox.Show("Authentication expired. Please re-authenticate.", "Spotify Plugin Error");
+            }
+            catch (APIException ex)
+            {
+                mbApiInterface.MB_Trace($"FollowArtistAsync - API Error: {ex.Response?.StatusCode} - {ex.Message}");
+                MessageBox.Show("Failed to follow artist: " + ex.Message, "Spotify Plugin Error");
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"FollowArtistAsync failed: {ex.GetType().Name} - {ex.Message}");
+            }
+        }
+
+        public async Task RemoveTrackAsync()
+        {
+            try
+            {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_trackID))
+                {
+                    return;
+                }
+
+                var track = new LibraryRemoveTracksRequest(new List<string> { _trackID });
+                await _spotify.Library.RemoveTracks(track).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _trackLIB = false;
+                }
+                RefreshPanelUi();
+            }
+            catch (APIUnauthorizedException ex)
+            {
+                mbApiInterface.MB_Trace($"RemoveTrackAsync - Unauthorized: {ex.Message}");
+                MessageBox.Show("Authentication expired. Please re-authenticate.", "Spotify Plugin Error");
+            }
+            catch (APIException ex)
+            {
+                mbApiInterface.MB_Trace($"RemoveTrackAsync - API Error: {ex.Response?.StatusCode} - {ex.Message}");
+                MessageBox.Show("Failed to remove track: " + ex.Message, "Spotify Plugin Error");
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"RemoveTrackAsync failed: {ex.GetType().Name} - {ex.Message}");
+            }
+        }
+
+        public async Task RemoveAlbumAsync()
+        {
+            try
+            {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_albumID))
+                {
+                    return;
+                }
+
+                var album = new LibraryRemoveAlbumsRequest(new List<string> { _albumID });
+                await _spotify.Library.RemoveAlbums(album).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _albumLIB = false;
+                }
+                RefreshPanelUi();
+            }
+            catch (APIUnauthorizedException ex)
+            {
+                mbApiInterface.MB_Trace($"RemoveAlbumAsync - Unauthorized: {ex.Message}");
+                MessageBox.Show("Authentication expired. Please re-authenticate.", "Spotify Plugin Error");
+            }
+            catch (APIException ex)
+            {
+                mbApiInterface.MB_Trace($"RemoveAlbumAsync - API Error: {ex.Response?.StatusCode} - {ex.Message}");
+                MessageBox.Show("Failed to remove album: " + ex.Message, "Spotify Plugin Error");
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"RemoveAlbumAsync failed: {ex.GetType().Name} - {ex.Message}");
+            }
+        }
+
+        public async Task UnfollowArtistAsync()
+        {
+            try
+            {
+                if (_spotify == null || string.IsNullOrWhiteSpace(_artistID))
+                {
+                    return;
+                }
+
+                var artist = new UnfollowRequest(UnfollowRequest.Type.Artist, new List<string> { _artistID });
+                await _spotify.Follow.Unfollow(artist).ConfigureAwait(false);
+
+                lock (_stateLock)
+                {
+                    _artistLIB = false;
+                }
+                RefreshPanelUi();
+            }
+            catch (APIUnauthorizedException ex)
+            {
+                mbApiInterface.MB_Trace($"UnfollowArtistAsync - Unauthorized: {ex.Message}");
+                MessageBox.Show("Authentication expired. Please re-authenticate.", "Spotify Plugin Error");
+            }
+            catch (APIException ex)
+            {
+                mbApiInterface.MB_Trace($"UnfollowArtistAsync - API Error: {ex.Response?.StatusCode} - {ex.Message}");
+                MessageBox.Show("Failed to unfollow artist: " + ex.Message, "Spotify Plugin Error");
+            }
+            catch (Exception ex)
+            {
+                mbApiInterface.MB_Trace($"UnfollowArtistAsync failed: {ex.GetType().Name} - {ex.Message}");
             }
         }
     }
