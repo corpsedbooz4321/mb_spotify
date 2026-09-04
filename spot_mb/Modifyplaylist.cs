@@ -630,43 +630,56 @@ namespace MusicBeePlugin
 				{
 					return cachedUris.Contains(trackUri);
 				}
-
-				var fetchTask = FetchAllPlaylistTrackUrisAsync(playlistId);
-				var finished = await Task.WhenAny(fetchTask, Task.Delay(PlaylistMembershipCheckTimeout)).ConfigureAwait(false);
-
-				if (finished != fetchTask)
+				try
 				{
-					mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync: timed out after {PlaylistMembershipCheckTimeout.TotalSeconds}s for playlist {playlistId}");
+					var token = await GetValidAccessTokenAsync().ConfigureAwait(false);
+					if (string.IsNullOrWhiteSpace(token))
+						return false;
 
-					// Don't just abandon it silently - if it eventually completes, populate the
-					// cache so the next check (or clicking Add/Remove) is fast and correct, and
-					// observe any exception so it doesn't surface as an unobserved task exception.
-					_ = fetchTask.ContinueWith(t =>
+					string trackId = trackUri.Replace("spotify:track:", "");
+
+					var url = $"https://api.spotify.com/v1/playlists/{playlistId}/items?limit=50&fields=items(track(id))";
+
+					using (var request = new HttpRequestMessage(HttpMethod.Get, url))
 					{
-						if (t.Status == TaskStatus.RanToCompletion)
-						{
-							_playlistTrackUriCache[playlistId] = t.Result;
-							_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
-						}
-						else if (t.IsFaulted)
-						{
-							mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync: abandoned fetch for {playlistId} failed: {t.Exception?.GetBaseException().Message}");
-						}
-					}, TaskScheduler.Default);
+						request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
+						using (var response = await _sharedHttpClient.SendAsync(request).ConfigureAwait(false))
+						{
+							var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+							if (!response.IsSuccessStatusCode)
+							{
+								mbApiInterface.MB_Trace($"Quick check failed: {body}");
+								return false;
+							}
+
+							var page = JsonConvert.DeserializeObject<PlaylistItemsPage>(body);
+
+							if (page?.Items != null)
+							{
+								foreach (var entry in page.Items)
+								{
+									var trackRef = entry?.Item ?? entry?.Track;
+									if (trackRef?.Id == trackId)
+										return true;
+								}
+							}
+						}
+					}
+
+					// NOT FOUND in first page → assume false (fast)
 					return false;
 				}
-
-				var uris = await fetchTask.ConfigureAwait(false);
-
-				_playlistTrackUriCache[playlistId] = uris;
-				_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
-
-				return uris.Contains(trackUri);
+				catch (Exception ex)
+				{
+					mbApiInterface.MB_Trace($"Quick check failed: {ex.Message}");
+					return false;
+				}
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
+				mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync failed: {ex.Message}");
 				return false;
 			}
 		}
