@@ -505,22 +505,9 @@ namespace MusicBeePlugin
 				// IsTrackInPlaylistAsync enforces its own timeout internally (see below), so this
 				// always resolves within a bounded time even if the underlying Spotify call hangs.
 				bool inPlaylist = await IsTrackInPlaylistAsync(myPlaylist.Id, trackUri).ConfigureAwait(false);
-
-				if (!inPlaylist)
-				{
-					_ = Task.Run(async () =>
-					{
-						var fullUris = await FetchAllPlaylistTrackUrisAsync(myPlaylist.Id);
-						bool actuallyInpLaylist = fullUris.Contains(trackUri);
-
-						if (ReferenceEquals(_selectedPlaylist, myPlaylist))
-						{
-							_trackInSelectedPlaylist = actuallyInpLaylist;
-							_playlistMembershipKnown = true;
-							RefreshPanelUi();
-						}
-					});
-				}
+				_trackInSelectedPlaylist = inPlaylist;
+				_playlistMembershipKnown = true;
+				RefreshPanelUi();
 
 				if (ReferenceEquals(_selectedPlaylist, myPlaylist) && _trackID == myTrackId)
 				{
