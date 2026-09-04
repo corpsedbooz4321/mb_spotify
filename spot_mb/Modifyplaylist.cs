@@ -7,6 +7,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Web;
 using System.Windows.Forms;
 using Newtonsoft.Json;
 using SpotifyAPI.Web;
@@ -194,7 +195,12 @@ namespace MusicBeePlugin
 					TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
 						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
-					string actionLabel = _trackInSelectedPlaylist ? "Remove" : "Add";
+					string actionLabel;
+					if (!_playlistMembershipKnown)
+						actionLabel = "Checking...";
+					else
+						actionLabel = _trackInSelectedPlaylist ? "Remove" : "Add";
+
 					DrawActionButton(g, ActionButtonBounds(widget), actionLabel, _playlistMembershipKnown, fg);
 
 					DrawActionButton(g, RefreshButtonBounds(widget), "\u21BB", _playlistMembershipKnown, fg);
@@ -499,6 +505,22 @@ namespace MusicBeePlugin
 				// IsTrackInPlaylistAsync enforces its own timeout internally (see below), so this
 				// always resolves within a bounded time even if the underlying Spotify call hangs.
 				bool inPlaylist = await IsTrackInPlaylistAsync(myPlaylist.Id, trackUri).ConfigureAwait(false);
+
+				if (!inPlaylist)
+				{
+					_ = Task.Run(async () =>
+					{
+						var fullUris = await FetchAllPlaylistTrackUrisAsync(myPlaylist.Id);
+						bool actuallyInpLaylist = fullUris.Contains(trackUri);
+
+						if (ReferenceEquals(_selectedPlaylist, myPlaylist))
+						{
+							_trackInSelectedPlaylist = actuallyInpLaylist;
+							_playlistMembershipKnown = true;
+							RefreshPanelUi();
+						}
+					});
+				}
 
 				if (ReferenceEquals(_selectedPlaylist, myPlaylist) && _trackID == myTrackId)
 				{
