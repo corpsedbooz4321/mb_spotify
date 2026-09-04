@@ -43,6 +43,11 @@ namespace MusicBeePlugin
         private const int FONT_SIZE_SMALL = 8;
         private const int FONT_SIZE_ICON = 14;
 
+        private const int ARTWORK_SIZE = 60;
+        // Height of each clickable action row (Save Track / Save Album / Follow Artist),
+        // used so the click hit-test area actually matches where the text is drawn.
+        private const int ACTION_ROW_HEIGHT = 18;
+
         public PluginInfo Initialise(IntPtr apiInterfacePtr)
         {
             mbApiInterface = new MusicBeeApiInterface();
@@ -104,6 +109,10 @@ namespace MusicBeePlugin
         {
             try
             {
+                // Dispose any fonts from a previous call (MusicBee can recreate the dockable
+                // panel, e.g. on a skin change) so we don't leak GDI font handles.
+                DisposeFonts();
+
                 // Initialize fonts
                 largeBold = new Font(panel.Font.FontFamily, FONT_SIZE_MEDIUM, FontStyle.Bold);
                 smallRegular = new Font(panel.Font.FontFamily, FONT_SIZE_SMALL);
@@ -125,23 +134,25 @@ namespace MusicBeePlugin
             }
         }
 
-        public string Truncate(string text, Font font)
+        public string Truncate(string text, Font font, int maxWidth)
         {
-            if (TextRenderer.MeasureText(text + "...", font).Width < panel.Width)
+            if (string.IsNullOrEmpty(text) || maxWidth <= 0)
+            {
+                return string.Empty;
+            }
+
+            if (TextRenderer.MeasureText(text + "...", font).Width <= maxWidth)
             {
                 return text;
             }
-            else
-            {
-                int i = text.Length;
-                while (TextRenderer.MeasureText(text + "...", font).Width > panel.Width)
-                {
-                    text = text.Substring(0, --i);
-                    if (i == 0) break;
-                }
 
-                return text + "...";
+            int i = text.Length;
+            while (i > 0 && TextRenderer.MeasureText(text.Substring(0, i) + "...", font).Width > maxWidth)
+            {
+                i--;
             }
+
+            return i > 0 ? text.Substring(0, i) + "..." : "...";
         }
 
         private void DrawPanel(object sender, PaintEventArgs e)
@@ -150,7 +161,6 @@ namespace MusicBeePlugin
             {
                 var bg = panel.BackColor;
                 var text1 = panel.ForeColor;
-                var highlight = Color.FromArgb(2021216);
                 e.Graphics.Clear(bg);
                 panel.Cursor = Cursors.Hand;
 
@@ -167,24 +177,27 @@ namespace MusicBeePlugin
                 {
                     DrawPlaylistWidget(e.Graphics);
 
-                    TextRenderer.DrawText(e.Graphics, _title, largeBold, new Point(TEXT_OFFSET_X, TITLE_Y), text1);
-                    TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(TEXT_OFFSET_X, ARTIST_Y), text1);
-                    TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(TEXT_OFFSET_X, ALBUM_Y), text1);
+                    // Title/Artist sit in the same vertical band as the playlist widget (top-right),
+                    // so their width must be capped to the widget's left edge or a long track title
+                    // draws straight through/underneath the widget. Album sits below the widget, so
+                    // it only needs to be capped to the panel width. EndEllipsis makes long metadata
+                    // truncate cleanly instead of silently overflowing.
+                    int widgetSafeWidth = Math.Max(0, PlaylistWidgetBounds.Left - TEXT_OFFSET_X - SpacingUnit);
+                    int fullRowWidth = Math.Max(0, panel.Width - TEXT_OFFSET_X * 2);
+
+                    var titleRect = new Rectangle(TEXT_OFFSET_X, TITLE_Y, widgetSafeWidth, ARTIST_Y - TITLE_Y);
+                    var artistRect = new Rectangle(TEXT_OFFSET_X, ARTIST_Y, widgetSafeWidth, ALBUM_Y - ARTIST_Y);
+                    var albumRect = new Rectangle(TEXT_OFFSET_X, ALBUM_Y, fullRowWidth, ARTWORK_Y - ALBUM_Y);
+
+                    var metadataFlags = TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding;
+                    TextRenderer.DrawText(e.Graphics, _title, largeBold, titleRect, text1, metadataFlags);
+                    TextRenderer.DrawText(e.Graphics, _artist, smallRegular, artistRect, text1, metadataFlags);
+                    TextRenderer.DrawText(e.Graphics, _album, smallRegular, albumRect, text1, metadataFlags);
 
                     if (!string.IsNullOrWhiteSpace(_imageURL))
                     {
-                        var cachedImage = GetCachedArtwork(_imageURL);
-                        if (cachedImage != null)
-                        {
-                            try
-                            {
-                                e.Graphics.DrawImage(cachedImage, new Point(ARTWORK_X, ARTWORK_Y));
-                            }
-                            catch (Exception ex)
-                            {
-                                mbApiInterface.MB_Trace($"DrawPanel (artwork) failed: {ex.GetType().Name} - {ex.Message}");
-                            }
-                        }
+                        EnsureArtworkLoading(_imageURL);
+                        DrawArtworkIfReady(e.Graphics, _imageURL);
                     }
 
                     if (_trackLIB)
@@ -261,12 +274,15 @@ namespace MusicBeePlugin
                 }
                 _auth = 0;
                 _codeExchanged = false;
+                // This is an explicit user action, so force-clear the flag rather than
+                // silently no-op-ing if a previous auth attempt left it stuck.
+                _authInProgress = false;
 
                 if (string.IsNullOrWhiteSpace(_clientID))
                 {
                     Configure(IntPtr.Zero);
                 }
-                else if (!_authInProgress)
+                else
                 {
                     _ = SpotifyWebAuthAsync();
                 }
@@ -301,6 +317,7 @@ namespace MusicBeePlugin
                             }
                             _auth = 0;
                             _codeExchanged = false;
+                            _authInProgress = false;
                             _spotify = null;
                             _trackMissing = 1;
 
@@ -345,10 +362,17 @@ namespace MusicBeePlugin
                         return;
                     }
 
-                    Point point = panel.PointToClient(Cursor.Position);
+                    // These rectangles match exactly where the text is drawn (see DrawPanel),
+                    // so clicking anywhere on the visible label registers - the old version used
+                    // magic-number Y bands that started ~5px below each row, silently missing
+                    // clicks on the top of each line of text.
+                    int rowRight = this.panel.Width;
+                    var followRect = new Rectangle(ACTION_TEXT_X, FOLLOW_ARTIST_Y, rowRight - ACTION_TEXT_X, ACTION_ROW_HEIGHT);
+                    var albumRect = new Rectangle(ACTION_TEXT_X, SAVE_ALBUM_Y, rowRight - ACTION_TEXT_X, ACTION_ROW_HEIGHT);
+                    var trackRect = new Rectangle(ACTION_TEXT_X, SAVE_TRACK_Y, rowRight - ACTION_TEXT_X, ACTION_ROW_HEIGHT);
 
                     // Follow/Unfollow Artist
-                    if (point.X > ACTION_TEXT_X && point.X < this.panel.Width && point.Y < 140 && point.Y > 130)
+                    if (followRect.Contains(clickPoint))
                     {
                         if (_artistLIB)
                         {
@@ -362,7 +386,7 @@ namespace MusicBeePlugin
                         }
                     }
                     // Save/Remove Album
-                    else if (point.X > ACTION_TEXT_X && point.X < this.panel.Width && point.Y < 120 && point.Y > 110)
+                    else if (albumRect.Contains(clickPoint))
                     {
                         if (_albumLIB)
                         {
@@ -376,7 +400,7 @@ namespace MusicBeePlugin
                         }
                     }
                     // Save/Remove Track
-                    else if (point.X > ACTION_TEXT_X && point.X < this.panel.Width && point.Y < 100 && point.Y > 90)
+                    else if (trackRect.Contains(clickPoint))
                     {
                         if (_trackLIB)
                         {
@@ -484,9 +508,10 @@ namespace MusicBeePlugin
             {
                 lock (_artworkLock)
                 {
-                    _cachedArtwork?.Dispose();
-                    _cachedArtwork = null;
+                    _cachedArtworkResized?.Dispose();
+                    _cachedArtworkResized = null;
                     _cachedArtworkUrl = null;
+                    _artworkFetchInProgressUrl = null;
                 }
             }
             catch (Exception ex)

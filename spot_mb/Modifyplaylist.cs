@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Newtonsoft.Json;
@@ -20,6 +22,11 @@ namespace MusicBeePlugin
 		private static List<SimplePlaylist> _dropdownPlaylists = null;
 		private static bool _playlistActionInProgress = false;
 		private static List<SimplePlaylist> _dropdownPlaylistsCache = null;
+		private static DateTime _dropdownPlaylistsCacheTimestamp = DateTime.MinValue;
+
+		// Pagination: playlists are shown 3 at a time with a Back/+More nav row.
+		private const int PlaylistsPerPage = 3;
+		private static int _dropdownPage = 0;
 
 		private static readonly Dictionary<(string playlistId, string trackUri), bool> _localMembershipOverrides =
 			new Dictionary<(string, string), bool>();
@@ -32,7 +39,10 @@ namespace MusicBeePlugin
 
 		private static readonly Dictionary<int, Pen> _penCache = new Dictionary<int, Pen>();
 		private static readonly Dictionary<int, Brush> _brushCache = new Dictionary<int, Brush>();
-		private static readonly Dictionary<(string name, int panelWidth), string> _truncateCache =
+		// Keyed by (name, maxWidth) - maxWidth is the actual space the text will be drawn into,
+		// NOT the panel width (the panel is far wider than the widget/dropdown row, so keying on
+		// panel width meant long names were never actually truncated to fit their row).
+		private static readonly Dictionary<(string name, int maxWidth), string> _truncateCache =
 			new Dictionary<(string, int), string>();
 
 		private const int MaxGdiCacheEntries = 64;
@@ -71,15 +81,15 @@ namespace MusicBeePlugin
 			return brush;
 		}
 
-		private string TruncateCached(string name, Font font)
+		private string TruncateCached(string name, Font font, int maxWidth)
 		{
-			var key = (name, panel.Width);
+			var key = (name, maxWidth);
 			if (_truncateCache.TryGetValue(key, out var cached))
 			{
 				return cached;
 			}
 
-			var truncated = Truncate(name, font);
+			var truncated = Truncate(name, font, maxWidth);
 
 			if (_truncateCache.Count > 64)
 			{
@@ -126,11 +136,32 @@ namespace MusicBeePlugin
 			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + SpacingUnit,
 				PlaylistWidgetBounds.Width, PlaylistLabelSize.Height + SpacingUnit / 2);
 
+		private List<SimplePlaylist> CurrentPagePlaylists()
+		{
+			if (_dropdownPlaylists == null || _dropdownPlaylists.Count == 0)
+			{
+				return new List<SimplePlaylist>();
+			}
+
+			return _dropdownPlaylists
+				.Skip(_dropdownPage * PlaylistsPerPage)
+				.Take(PlaylistsPerPage)
+				.ToList();
+		}
+
+		private int TotalDropdownPages =>
+			_dropdownPlaylists == null || _dropdownPlaylists.Count == 0
+				? 1
+				: (int)Math.Ceiling(_dropdownPlaylists.Count / (double)PlaylistsPerPage);
+
+		private bool DropdownNeedsPaging => (_dropdownPlaylists?.Count ?? 0) > PlaylistsPerPage;
+
 		private Rectangle PlaylistDropdownBounds
 		{
 			get
 			{
-				int rows = 1 + (_dropdownPlaylists?.Count ?? 0);
+				int pageCount = CurrentPagePlaylists().Count;
+				int rows = 1 + pageCount + (DropdownNeedsPaging ? 1 : 0);
 				int rowHeight = DropdownRowHeight;
 				int width = Math.Max(
 					MeasureLabel("Create Playlist", smallBold).Width + SpacingUnit * 4,
@@ -158,9 +189,8 @@ namespace MusicBeePlugin
 				}
 				else
 				{
-					var name = TruncateCached(_selectedPlaylist.Name, smallRegular);
-
 					var nameRect = new Rectangle(widget.X + SpacingUnit, widget.Y, widget.Width - SpacingUnit * 2, widget.Height);
+					var name = TruncateCached(_selectedPlaylist.Name, smallRegular, nameRect.Width);
 					TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
 						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
@@ -224,22 +254,46 @@ namespace MusicBeePlugin
 					TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
 				rowY += rowHeight;
 
-				if (_dropdownPlaylists != null)
+				int availableTextWidth = Math.Max(0, bounds.Width - SpacingUnit * 3);
+				foreach (var pl in CurrentPagePlaylists())
 				{
-					foreach (var pl in _dropdownPlaylists)
-					{
-						var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
-						var label = TruncateCached(pl.Name, smallRegular);
-						TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
-							TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-						rowY += rowHeight;
-					}
+					var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
+					var label = TruncateCached(pl.Name, smallRegular, availableTextWidth);
+					TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
+						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding | TextFormatFlags.EndEllipsis);
+					rowY += rowHeight;
+				}
+
+				if (DropdownNeedsPaging)
+				{
+					DrawDropdownNavRow(g, new Rectangle(bounds.X, rowY, bounds.Width, rowHeight), fg);
 				}
 			}
 			catch (Exception ex)
 			{
 				mbApiInterface.MB_Trace($"DrawPlaylistDropdown failed: {ex.GetType().Name} - {ex.Message}");
 			}
+		}
+
+		private void DrawDropdownNavRow(Graphics g, Rectangle navBounds, Color fg)
+		{
+			int half = navBounds.Width / 2;
+			var backCell = new Rectangle(navBounds.X, navBounds.Y, half, navBounds.Height);
+			var moreCell = new Rectangle(navBounds.X + half, navBounds.Y, navBounds.Width - half, navBounds.Height);
+
+			bool canGoBack = _dropdownPage > 0;
+			bool canGoMore = _dropdownPage < TotalDropdownPages - 1;
+
+			g.DrawLine(GetPen(Color.FromArgb(40, fg)), navBounds.X, navBounds.Y, navBounds.Right, navBounds.Y);
+			g.DrawLine(GetPen(Color.FromArgb(30, fg)), moreCell.X, moreCell.Y, moreCell.X, moreCell.Bottom);
+
+			var backColor = canGoBack ? fg : Color.FromArgb(70, fg);
+			var moreColor = canGoMore ? fg : Color.FromArgb(70, fg);
+
+			TextRenderer.DrawText(g, "< Back", iconFont, backCell, backColor,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
+			TextRenderer.DrawText(g, "+ More", iconFont, moreCell, moreColor,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding);
 		}
 
 		private bool HandlePlaylistWidgetClick(Point clickPoint)
@@ -255,15 +309,41 @@ namespace MusicBeePlugin
 						int relativeY = clickPoint.Y - dropdown.Y;
 						int rowIndex = relativeY / DropdownRowHeight;
 
-						_playlistDropdownOpen = false;
+						var pageItems = CurrentPagePlaylists();
+						int navRowIndex = 1 + pageItems.Count;
 
 						if (rowIndex == 0)
 						{
+							_playlistDropdownOpen = false;
 							OpenCreatePlaylistPrompt();
 						}
-						else if (_dropdownPlaylists != null && rowIndex - 1 < _dropdownPlaylists.Count)
+						else if (rowIndex - 1 < pageItems.Count)
 						{
-							SelectPlaylist(_dropdownPlaylists[rowIndex - 1]);
+							_playlistDropdownOpen = false;
+							SelectPlaylist(pageItems[rowIndex - 1]);
+						}
+						else if (DropdownNeedsPaging && rowIndex == navRowIndex)
+						{
+							// Clicking the nav row pages the list instead of closing the dropdown.
+							int relativeX = clickPoint.X - dropdown.X;
+							bool clickedMoreHalf = relativeX >= dropdown.Width / 2;
+
+							if (clickedMoreHalf)
+							{
+								if (_dropdownPage < TotalDropdownPages - 1)
+								{
+									_dropdownPage++;
+								}
+							}
+							else if (_dropdownPage > 0)
+							{
+								_dropdownPage--;
+							}
+						}
+						else
+						{
+							_playlistDropdownOpen = false;
+							_dropdownPlaylists = null;
 						}
 
 						panel.Invalidate();
@@ -282,6 +362,7 @@ namespace MusicBeePlugin
 					if (_selectedPlaylist == null)
 					{
 						_playlistDropdownOpen = true;
+						_dropdownPage = 0;
 						_ = LoadDropdownPlaylistsAsync();
 						panel.Invalidate();
 						return true;
@@ -341,7 +422,10 @@ namespace MusicBeePlugin
 		{
 			try
 			{
-				if (_dropdownPlaylistsCache != null)
+				bool cacheIsFresh = _dropdownPlaylistsCache != null
+					&& DateTime.UtcNow - _dropdownPlaylistsCacheTimestamp < PlaylistTrackCacheTtl;
+
+				if (cacheIsFresh)
 				{
 					_dropdownPlaylists = _dropdownPlaylistsCache;
 					panel.Invalidate();
@@ -373,8 +457,13 @@ namespace MusicBeePlugin
 				}
 
 				_dropdownPlaylistsCache = playlists;
+				_dropdownPlaylistsCacheTimestamp = DateTime.UtcNow;
 				_dropdownPlaylists = playlists;
-				panel?.Invalidate();
+
+				// This runs after an await with ConfigureAwait(false), so we're on a background
+				// thread here - a direct panel.Invalidate() would be a cross-thread UI call.
+				// RefreshPanelUi() marshals to the UI thread safely.
+				RefreshPanelUi();
 			}
 			catch (Exception ex)
 			{
@@ -407,6 +496,8 @@ namespace MusicBeePlugin
 				_playlistMembershipKnown = false;
 				RefreshPanelUi();
 
+				// IsTrackInPlaylistAsync enforces its own timeout internally (see below), so this
+				// always resolves within a bounded time even if the underlying Spotify call hangs.
 				bool inPlaylist = await IsTrackInPlaylistAsync(myPlaylist.Id, trackUri).ConfigureAwait(false);
 
 				if (ReferenceEquals(_selectedPlaylist, myPlaylist) && _trackID == myTrackId)
@@ -419,24 +510,115 @@ namespace MusicBeePlugin
 			catch (Exception ex)
 			{
 				mbApiInterface.MB_Trace($"RefreshMembershipForCurrentTrackAsync failed: {ex.GetType().Name} - {ex.Message}");
-				if (ReferenceEquals(_selectedPlaylist, _selectedPlaylist) && _trackID == _trackID)
+				_playlistMembershipKnown = true;
+				RefreshPanelUi();
+			}
+		}
+
+		// Small POCOs for manually parsing the "Get Playlist Items" response, since this now goes
+		// through a raw HTTP call instead of the SDK's PlaylistGetItemsRequest/GetItems (see
+		// FetchAllPlaylistTrackUrisAsync below for why).
+		private sealed class PlaylistItemsPage
+		{
+			[JsonProperty("items")]
+			public List<PlaylistItemEntry> Items { get; set; }
+
+			[JsonProperty("next")]
+			public string Next { get; set; }
+		}
+
+		private sealed class PlaylistItemEntry
+		{
+			// "item" is the current field name; "track" is kept for older API responses/back-compat.
+			[JsonProperty("item")]
+			public PlaylistTrackRef Item { get; set; }
+
+			[JsonProperty("track")]
+			public PlaylistTrackRef Track { get; set; }
+		}
+
+		private sealed class PlaylistTrackRef
+		{
+			[JsonProperty("uri")]
+			public string Uri { get; set; }
+
+			[JsonProperty("id")]
+			public string Id { get; set; }
+		}
+
+		private async Task<HashSet<string>> FetchAllPlaylistTrackUrisAsync(string playlistId)
+		{
+			var uris = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+			try
+			{
+				var token = await GetValidAccessTokenAsync().ConfigureAwait(false);
+				if (string.IsNullOrWhiteSpace(token))
 				{
-					RefreshPanelUi();
+					mbApiInterface.MB_Trace("FetchAllPlaylistTrackUrisAsync: no access token available");
+					return uris;
+				}
+
+				const int limit = 100;
+				int offset = 0;
+				var fields = Uri.EscapeDataString("items(item(uri,id),track(uri,id)),next");
+
+				while (true)
+				{
+					var url = $"https://api.spotify.com/v1/playlists/{playlistId}/items?limit={limit}&offset={offset}&fields={fields}&additional_types=track";
+
+					using (var request = new HttpRequestMessage(HttpMethod.Get, url))
+					{
+						request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+						using (var response = await _sharedHttpClient.SendAsync(request).ConfigureAwait(false))
+						{
+							var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+							if (!response.IsSuccessStatusCode)
+							{
+								mbApiInterface.MB_Trace($"FetchAllPlaylistTrackUrisAsync failed: {(int)response.StatusCode} {response.StatusCode} - {body}");
+								break;
+							}
+
+							var page = JsonConvert.DeserializeObject<PlaylistItemsPage>(body);
+							if (page?.Items != null)
+							{
+								foreach (var entry in page.Items)
+								{
+									var trackRef = entry?.Item ?? entry?.Track;
+									var trackUri = trackRef?.Uri ?? (trackRef?.Id != null ? "spotify:track:" + trackRef.Id : null);
+									if (!string.IsNullOrWhiteSpace(trackUri))
+									{
+										uris.Add(trackUri);
+									}
+								}
+							}
+
+							if (string.IsNullOrEmpty(page?.Next))
+							{
+								break;
+							}
+
+							offset += limit;
+						}
+					}
 				}
 			}
-		}
-
-		private static FullTrack ExtractFullTrack(object entry)
-		{
-			if (entry == null)
+			catch (Exception ex)
 			{
-				return null;
+				mbApiInterface.MB_Trace($"FetchAllPlaylistTrackUrisAsync failed: {ex.GetType().Name} - {ex.Message}");
 			}
 
-			var type = entry.GetType();
-			var prop = type.GetProperty("Track") ?? type.GetProperty("Item");
-			return prop?.GetValue(entry) as FullTrack;
+			return uris;
 		}
+
+		// How long we'll wait for the playlist's tracks to be fetched before giving up. The
+		// CancellationTokenSource this used to be wrapped in (see RefreshMembershipForCurrentTrackAsync
+		// previously) was never actually passed into the call it was meant to time out, so a hung
+		// request here would freeze playlist membership (and the Add/Remove button) forever - this
+		// enforces the same 10s budget for real via Task.WhenAny instead.
+		private static readonly TimeSpan PlaylistMembershipCheckTimeout = TimeSpan.FromSeconds(10);
 
 		private async Task<bool> IsTrackInPlaylistAsync(string playlistId, string trackUri)
 		{
@@ -449,7 +631,33 @@ namespace MusicBeePlugin
 					return cachedUris.Contains(trackUri);
 				}
 
-				var uris = await FetchAllPlaylistTrackUrisAsync(playlistId).ConfigureAwait(false);
+				var fetchTask = FetchAllPlaylistTrackUrisAsync(playlistId);
+				var finished = await Task.WhenAny(fetchTask, Task.Delay(PlaylistMembershipCheckTimeout)).ConfigureAwait(false);
+
+				if (finished != fetchTask)
+				{
+					mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync: timed out after {PlaylistMembershipCheckTimeout.TotalSeconds}s for playlist {playlistId}");
+
+					// Don't just abandon it silently - if it eventually completes, populate the
+					// cache so the next check (or clicking Add/Remove) is fast and correct, and
+					// observe any exception so it doesn't surface as an unobserved task exception.
+					_ = fetchTask.ContinueWith(t =>
+					{
+						if (t.Status == TaskStatus.RanToCompletion)
+						{
+							_playlistTrackUriCache[playlistId] = t.Result;
+							_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
+						}
+						else if (t.IsFaulted)
+						{
+							mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync: abandoned fetch for {playlistId} failed: {t.Exception?.GetBaseException().Message}");
+						}
+					}, TaskScheduler.Default);
+
+					return false;
+				}
+
+				var uris = await fetchTask.ConfigureAwait(false);
 
 				_playlistTrackUriCache[playlistId] = uris;
 				_playlistTrackUriCacheTimestamp[playlistId] = DateTime.UtcNow;
@@ -461,51 +669,6 @@ namespace MusicBeePlugin
 				mbApiInterface.MB_Trace($"IsTrackInPlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
 				return false;
 			}
-		}
-
-		private async Task<HashSet<string>> FetchAllPlaylistTrackUrisAsync(string playlistId)
-		{
-			var uris = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-			try
-			{
-				var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
-				{
-					Limit = 100,
-					Offset = 0,
-					Fields = { "items(track(uri))", "next" }
-				};
-
-				while (true)
-				{
-					var page = await _spotify.Playlists.GetItems(playlistId, request).ConfigureAwait(false);
-
-					if (page?.Items != null)
-					{
-						foreach (var entry in page.Items)
-						{
-							var fullTrack = ExtractFullTrack(entry);
-							if (fullTrack?.Uri != null)
-							{
-								uris.Add(fullTrack.Uri);
-							}
-						}
-					}
-
-					if (string.IsNullOrEmpty(page?.Next))
-					{
-						break;
-					}
-
-					request.Offset = (request.Offset ?? 0) + (request.Limit ?? 100);
-				}
-			}
-			catch (Exception ex)
-			{
-				mbApiInterface.MB_Trace($"FetchAllPlaylistTrackUrisAsync failed: {ex.GetType().Name} - {ex.Message}");
-			}
-
-			return uris;
 		}
 
 		private async Task AddCurrentTrackToSelectedPlaylistAsync()
@@ -550,10 +713,8 @@ namespace MusicBeePlugin
 		{
 			try
 			{
-				await _spotify.UserProfile.Current().ConfigureAwait(false);
-
-				var token = DeserializeConfig(_path, _rsaKey);
-				if (token == null || string.IsNullOrWhiteSpace(token.AccessToken))
+				var accessToken = await GetValidAccessTokenAsync().ConfigureAwait(false);
+				if (string.IsNullOrWhiteSpace(accessToken))
 				{
 					mbApiInterface.MB_Trace("RemoveTrackFromPlaylistViaRawApiAsync: no access token available");
 					return false;
@@ -566,7 +727,7 @@ namespace MusicBeePlugin
 
 				using (var request = new HttpRequestMessage(HttpMethod.Delete, $"https://api.spotify.com/v1/playlists/{playlistId}/items"))
 				{
-					request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.AccessToken);
+					request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 					request.Content = new StringContent(body, Encoding.UTF8, "application/json");
 
 					var response = await _rawApiHttpClient.SendAsync(request).ConfigureAwait(false);
@@ -683,13 +844,15 @@ namespace MusicBeePlugin
 				_selectedPlaylist = null;
 				_playlistMembershipKnown = false;
 				_dropdownPlaylistsCache = null;
+				_dropdownPlaylistsCacheTimestamp = DateTime.MinValue;
+				_dropdownPage = 0;
 
 				RefreshPanelUi();
 			}
 			catch (Exception ex)
 			{
 				mbApiInterface.MB_Trace($"CreatePlaylistAsync failed: {ex.GetType().Name} - {ex.Message}");
-				MessageBox.Show("Couldn't create the playlist:\n" + ex.Message, "Spotify Plugin Error");
+				ShowError("Couldn't create the playlist:\n" + ex.Message, "Spotify Plugin Error");
 			}
 		}
 	}
