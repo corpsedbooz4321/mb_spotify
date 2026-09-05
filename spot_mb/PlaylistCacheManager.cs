@@ -72,6 +72,32 @@ namespace MusicBeePlugin
 		}
 
 		/// <summary>
+		/// Track count for a playlist, straight from the cache. Kept as a plain int
+		/// lookup rather than trying to populate SimplePlaylist's own track-count
+		/// property, since that property's type/name isn't stable across SpotifyAPI.Web
+		/// versions - depending on it broke the build once already. Callers that want
+		/// a track count for display should use this instead of reading anything off
+		/// SimplePlaylist directly.
+		/// </summary>
+		public int GetCachedTrackCount(string playlistId)
+		{
+			return _cache?.Playlists?.FirstOrDefault(p => p.Id == playlistId)?.TotalTracks ?? 0;
+		}
+
+		/// <summary>
+		/// Force the next call to GetPlaylistsAsync to refetch from the API instead of
+		/// serving the (possibly up-to-an-hour) stale in-memory/disk cache. Used after
+		/// creating a playlist, and by the slider panel's refresh button.
+		/// </summary>
+		public void InvalidatePlaylistListCache()
+		{
+			if (_cache != null)
+			{
+				_cache.LastFetched = DateTime.MinValue;
+			}
+		}
+
+		/// <summary>
 		/// Get total number of available playlists
 		/// </summary>
 		public int GetTotalPlaylistsAvailable()
@@ -225,23 +251,51 @@ namespace MusicBeePlugin
 		{
 			try
 			{
-				var request = new PlaylistCurrentUsersRequest
+				// Bug fix: this used to fetch a single page of 50 playlists but still
+				// stored Spotify's reported Total (which can be > 50) as TotalAvailable.
+				// The pagination UI trusts TotalAvailable to decide whether "More" should
+				// be offered, so anyone with more than 50 playlists would see a "More"
+				// button that led to an empty page once the offset ran past what was
+				// actually cached. Page through everything instead.
+				const int pageSize = 50;
+				var allPlaylists = new List<CachedPlaylist>();
+				int offset = 0;
+				int total = 0;
+
+				while (true)
 				{
-					Limit = 50,
-					Offset = 0
-				};
+					var request = new PlaylistCurrentUsersRequest
+					{
+						Limit = pageSize,
+						Offset = offset
+					};
 
-				var result = await _spotify.Playlists.CurrentUsers(request);
+					var result = await _spotify.Playlists.CurrentUsers(request);
 
-				_cache.Playlists = result.Items.Select(p => new CachedPlaylist
-				{
-					Id = p.Id,
-					Name = p.Name,
-					TotalTracks = p.Tracks?.Total ?? 0,
-					CachedAt = DateTime.UtcNow
-				}).ToList();
+					if (result?.Items == null || result.Items.Count == 0)
+					{
+						break;
+					}
 
-				_cache.TotalAvailable = result.Total ?? 0;
+					allPlaylists.AddRange(result.Items.Select(p => new CachedPlaylist
+					{
+						Id = p.Id,
+						Name = p.Name,
+						TotalTracks = p.Tracks?.Total ?? 0,
+						CachedAt = DateTime.UtcNow
+					}));
+
+					total = result.Total ?? allPlaylists.Count;
+					offset += pageSize;
+
+					if (offset >= total || result.Items.Count < pageSize || string.IsNullOrEmpty(result.Next))
+					{
+						break;
+					}
+				}
+
+				_cache.Playlists = allPlaylists;
+				_cache.TotalAvailable = total;
 				_cache.LastFetched = DateTime.UtcNow;
 
 				SaveCacheToDisk();
