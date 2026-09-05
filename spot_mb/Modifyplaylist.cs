@@ -19,15 +19,20 @@ namespace MusicBeePlugin
 		private static int _playlistOffset = 0;                    // 0, 3, 6, 9... for pagination
 		private static int _totalPlaylistsAvailable = 0;
 		private static bool _loadingMorePlaylists = false;
+		private static bool _refreshingSliderMemberships = false;
 		private static List<SimplePlaylist> _visiblePlaylists;     // Currently displayed 3 playlists
 		private PlaylistCacheManager _cacheManager;
 
-		// === OLD DROPDOWN VARIABLES (KEEP FOR NOW) ===
-		private static bool _playlistDropdownOpen = false;
+		// Every membership lookup/cache key needs the full "spotify:track:ID" form -
+		// the cache manager's track-URI sets and the Spotify API both deal in URIs,
+		// not bare IDs. Centralizing this avoids the bare-ID/URI mismatch bug where
+		// membership checks silently always came back "not a member".
+		private static string BuildTrackUri(string trackId) => "spotify:track:" + trackId;
+
+		// === SINGLE-PLAYLIST QUICK-ACTION STATE (main panel) ===
 		private static SimplePlaylist _selectedPlaylist = null;
 		private static bool _trackInSelectedPlaylist = false;
 		private static bool _playlistMembershipKnown = false; // false while the live check is in flight
-		private static List<SimplePlaylist> _dropdownPlaylists = null; // only populated while the dropdown is open
 		private static bool _playlistActionInProgress = false; // guards +/- and Create against double-clicks
 
 		private static readonly Dictionary<(string playlistId, string trackUri), bool> _localMembershipOverrides =
@@ -109,8 +114,6 @@ namespace MusicBeePlugin
 
 		private int SpacingUnit => Math.Max(2, PlaylistLabelSize.Height / 4);
 
-		private int DropdownRowHeight => MeasureLabel("Create Playlist", smallBold).Height + SpacingUnit;
-
 		private Rectangle PlaylistWidgetBounds
 		{
 			get
@@ -126,22 +129,6 @@ namespace MusicBeePlugin
 		private Rectangle PlaylistActionRowBounds =>
 			new Rectangle(PlaylistWidgetBounds.X, PlaylistWidgetBounds.Bottom + SpacingUnit,
 				PlaylistWidgetBounds.Width, PlaylistLabelSize.Height + SpacingUnit / 2);
-
-		private Rectangle PlaylistDropdownBounds
-		{
-			get
-			{
-				int rows = 1 + (_dropdownPlaylists?.Count ?? 0); // "Create Playlist" + playlists
-				int rowHeight = DropdownRowHeight;
-				int width = Math.Max(
-					MeasureLabel("Create Playlist", smallBold).Width + SpacingUnit * 4,
-					PlaylistWidgetBounds.Width * 2);
-				int top = _selectedPlaylist != null
-					? PlaylistActionRowBounds.Bottom + SpacingUnit
-					: PlaylistWidgetBounds.Bottom + SpacingUnit;
-				return new Rectangle(panel.Width - width - SpacingUnit * 2, top, width, rows * rowHeight);
-			}
-		}
 
 		private void DrawPlaylistWidget(Graphics g)
 		{
@@ -168,11 +155,6 @@ namespace MusicBeePlugin
 				DrawActionButton(g, ActionButtonBounds(widget), actionLabel, _playlistMembershipKnown, fg);
 
 				DrawActionButton(g, RefreshButtonBounds(widget), "\u21BB", _playlistMembershipKnown, fg);
-			}
-
-			if (_playlistDropdownOpen)
-			{
-				DrawPlaylistDropdown(g);
 			}
 		}
 
@@ -202,37 +184,7 @@ namespace MusicBeePlugin
 			return new Rectangle(actionBounds.X - SpacingUnit - size, actionBounds.Y, size, size);
 		}
 
-		private void DrawPlaylistDropdown(Graphics g)
-		{
-			var fg = panel.ForeColor;
-			var bounds = PlaylistDropdownBounds;
-			int rowHeight = DropdownRowHeight;
-
-			// Plain rectangle, same reasoning as the widget above - rounding is
-			// reserved for the +/- buttons specifically.
-			g.FillRectangle(GetBrush(panel.BackColor), bounds);
-			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
-
-			int rowY = bounds.Y;
-			var createRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
-			TextRenderer.DrawText(g, "Create Playlist", smallBold, createRect, fg,
-				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-			rowY += rowHeight;
-
-			if (_dropdownPlaylists != null)
-			{
-				foreach (var pl in _dropdownPlaylists)
-				{
-					var rowRect = new Rectangle(bounds.X, rowY, bounds.Width, rowHeight);
-					var label = TruncateCached(pl.Name, smallRegular);
-					TextRenderer.DrawText(g, label, smallRegular, rowRect, fg,
-						TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.LeftAndRightPadding);
-					rowY += rowHeight;
-				}
-			}
-		}
-
-		// ========== NEW SLIDER PANEL METHODS ==========
+		// ========== SLIDER PANEL METHODS ==========
 
 		private Rectangle PlaylistSliderBounds
 		{
@@ -253,8 +205,9 @@ namespace MusicBeePlugin
 			g.FillRectangle(GetBrush(panel.BackColor), bounds);
 			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
 
-			// Draw header: Back button | Refresh button
+			// Draw header: Back button | Create Playlist button | Refresh button
 			DrawSliderBackButton(g, bounds);
+			DrawSliderCreateButton(g, bounds);
 			DrawSliderRefreshButton(g, bounds);
 
 			// Draw playlist cards (3 at a time)
@@ -290,14 +243,18 @@ namespace MusicBeePlugin
 			TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
 				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
 
-			// Draw track count
-			string count = $"{playlist.Tracks?.Total ?? 0} tracks";
+			// Draw track count. Bug fix: this used to read playlist.Tracks?.Total, but
+			// GetPlaylistsAsync never populated that property (and trying to populate it
+			// via the SDK's own nested type broke the build - that type isn't stable
+			// across SpotifyAPI.Web versions). The cache manager already has the real
+			// count from when it fetched the playlist list, so read it from there.
+			string count = $"{_cacheManager?.GetCachedTrackCount(playlist.Id) ?? 0} tracks";
 			var countRect = new Rectangle(bounds.X + 5, bounds.Y + 24, bounds.Width - 10, 16);
 			TextRenderer.DrawText(g, count, smallRegular, countRect, fg,
 				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
 
 			// Draw Add/Remove button
-			bool? membership = _cacheManager?.GetCachedMembership(playlist.Id, _trackID);
+			bool? membership = _cacheManager?.GetCachedMembership(playlist.Id, BuildTrackUri(_trackID));
 
 			string buttonText = "Loading...";
 			if (membership.HasValue)
@@ -311,21 +268,49 @@ namespace MusicBeePlugin
 				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 		}
 
+		// Header button bounds are factored out and shared between drawing and click
+		// handling (like ActionButtonBounds/RefreshButtonBounds above) so the two can
+		// never drift apart the way the old inline rectangles could.
+		private Rectangle SliderBackButtonBounds(Rectangle bounds) =>
+			new Rectangle(bounds.X + 5, bounds.Y + 8, 35, 20);
+
+		private Rectangle SliderRefreshButtonBounds(Rectangle bounds) =>
+			new Rectangle(bounds.Right - 40, bounds.Y + 8, 35, 20);
+
+		private Rectangle SliderCreateButtonBounds(Rectangle bounds)
+		{
+			var refresh = SliderRefreshButtonBounds(bounds);
+			const int width = 60;
+			return new Rectangle(refresh.X - SpacingUnit - width, refresh.Y, width, refresh.Height);
+		}
+
 		private void DrawSliderBackButton(Graphics g, Rectangle bounds)
 		{
 			var fg = panel.ForeColor;
-			Rectangle backButton = new Rectangle(bounds.X + 5, bounds.Y + 8, 35, 20);
+			Rectangle backButton = SliderBackButtonBounds(bounds);
 			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), backButton);
 			TextRenderer.DrawText(g, "← Back", smallRegular, backButton, fg,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+		}
+
+		private void DrawSliderCreateButton(Graphics g, Rectangle bounds)
+		{
+			var fg = panel.ForeColor;
+			Rectangle createButton = SliderCreateButtonBounds(bounds);
+			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), createButton);
+			TextRenderer.DrawText(g, "+ New", smallRegular, createButton, fg,
 				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 		}
 
 		private void DrawSliderRefreshButton(Graphics g, Rectangle bounds)
 		{
 			var fg = panel.ForeColor;
-			Rectangle refreshButton = new Rectangle(bounds.Right - 40, bounds.Y + 8, 35, 20);
+			Rectangle refreshButton = SliderRefreshButtonBounds(bounds);
+			// Bug fix: the refresh icon used to look identical whether or not a refresh
+			// was in flight, and clicking it repeatedly fired overlapping refreshes.
+			var textColor = _refreshingSliderMemberships ? Color.FromArgb(90, fg) : fg;
 			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), refreshButton);
-			TextRenderer.DrawText(g, "↻", smallRegular, refreshButton, fg,
+			TextRenderer.DrawText(g, "↻", smallRegular, refreshButton, textColor,
 				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 		}
 
@@ -360,7 +345,7 @@ namespace MusicBeePlugin
 			var sliderBounds = PlaylistSliderBounds;
 
 			// Check Back button (top-left)
-			Rectangle backButton = new Rectangle(sliderBounds.X + 5, sliderBounds.Y + 8, 35, 20);
+			Rectangle backButton = SliderBackButtonBounds(sliderBounds);
 			if (backButton.Contains(clickPoint))
 			{
 				_playlistSliderOpen = false;
@@ -368,12 +353,19 @@ namespace MusicBeePlugin
 				return true;
 			}
 
+			// Check Create Playlist button (top, left of Refresh)
+			Rectangle createButton = SliderCreateButtonBounds(sliderBounds);
+			if (createButton.Contains(clickPoint))
+			{
+				OpenCreatePlaylistPrompt();
+				return true;
+			}
+
 			// Check Refresh button (top-right)
-			Rectangle refreshButton = new Rectangle(sliderBounds.Right - 40, sliderBounds.Y + 8, 35, 20);
-			if (refreshButton.Contains(clickPoint))
+			Rectangle refreshButton = SliderRefreshButtonBounds(sliderBounds);
+			if (refreshButton.Contains(clickPoint) && !_refreshingSliderMemberships)
 			{
 				RefreshAllMemberships();
-				panel.Invalidate();
 				return true;
 			}
 
@@ -452,9 +444,10 @@ namespace MusicBeePlugin
 				_totalPlaylistsAvailable = _cacheManager.GetTotalPlaylistsAvailable();
 
 				// Prefetch membership status for each playlist (non-blocking)
+				string trackUri = BuildTrackUri(_trackID);
 				foreach (var pl in _visiblePlaylists)
 				{
-					_ = PrefetchMembershipAsync(pl.Id, _trackID);
+					_ = PrefetchMembershipAsync(pl.Id, trackUri);
 				}
 
 				RefreshPanelUi();
@@ -488,11 +481,11 @@ namespace MusicBeePlugin
 			}
 		}
 
-		private async Task PrefetchMembershipAsync(string playlistId, string trackId)
+		private async Task PrefetchMembershipAsync(string playlistId, string trackUri)
 		{
 			try
 			{
-				await _cacheManager.IsTrackInPlaylistAsync(playlistId, trackId);
+				await _cacheManager.IsTrackInPlaylistAsync(playlistId, trackUri);
 				RefreshPanelUi();
 			}
 			catch (Exception ex)
@@ -503,60 +496,58 @@ namespace MusicBeePlugin
 
 		private async void HandleAddRemoveClick(SimplePlaylist playlist)
 		{
-			bool? isMember = await _cacheManager.IsTrackInPlaylistAsync(playlist.Id, _trackID);
+			// Bug fix: this used to check membership against `playlist` but then act on
+			// `_selectedPlaylist` via AddCurrentTrackToSelectedPlaylist/RemoveCurrentTrackFromSelectedPlaylist,
+			// so clicking Add/Remove on a card did nothing (or acted on the wrong
+			// playlist) unless it happened to match whatever was picked from the old
+			// dropdown. AddTrackToPlaylist/RemoveTrackFromPlaylist now take the target
+			// playlist explicitly.
+			bool? isMember = await _cacheManager.IsTrackInPlaylistAsync(playlist.Id, BuildTrackUri(_trackID));
 
 			if (isMember ?? false)
 			{
-				RemoveCurrentTrackFromSelectedPlaylist();
+				RemoveTrackFromPlaylist(playlist);
 			}
 			else
 			{
-				AddCurrentTrackToSelectedPlaylist();
+				AddTrackToPlaylist(playlist);
 			}
 		}
 
-		private void RefreshAllMemberships()
+		private async void RefreshAllMemberships()
 		{
-			if (_visiblePlaylists == null) return;
-
-			foreach (var pl in _visiblePlaylists)
+			// Bug fix: this used to fire off refreshes without awaiting them and then
+			// invalidate the panel immediately - the repaint happened before any of the
+			// results came back, so the cards never visibly updated until some unrelated
+			// repaint occurred later. It also passed the bare track ID instead of a URI,
+			// so the refreshed result was always wrong anyway.
+			if (_refreshingSliderMemberships || _visiblePlaylists == null || _visiblePlaylists.Count == 0)
 			{
-				_ = _cacheManager.RefreshTrackMembershipAsync(pl.Id, _trackID);
+				return;
+			}
+
+			_refreshingSliderMemberships = true;
+			panel.Invalidate();
+
+			try
+			{
+				string trackUri = BuildTrackUri(_trackID);
+				var tasks = _visiblePlaylists.Select(pl => _cacheManager.RefreshTrackMembershipAsync(pl.Id, trackUri));
+				await Task.WhenAll(tasks).ConfigureAwait(false);
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace("RefreshAllMemberships failed: " + ex.GetType().Name + " - " + ex.Message);
+			}
+			finally
+			{
+				_refreshingSliderMemberships = false;
+				RefreshPanelUi();
 			}
 		}
 
 		private bool HandlePlaylistWidgetClick(Point clickPoint)
 		{
-			if (_playlistDropdownOpen)
-			{
-				var dropdown = PlaylistDropdownBounds;
-
-				if (dropdown.Contains(clickPoint))
-				{
-					int relativeY = clickPoint.Y - dropdown.Y;
-					int rowIndex = relativeY / DropdownRowHeight;
-
-					_playlistDropdownOpen = false;
-
-					if (rowIndex == 0)
-					{
-						OpenCreatePlaylistPrompt();
-					}
-					else if (_dropdownPlaylists != null && rowIndex - 1 < _dropdownPlaylists.Count)
-					{
-						SelectPlaylist(_dropdownPlaylists[rowIndex - 1]);
-					}
-
-					panel.Invalidate();
-					return true;
-				}
-
-				_playlistDropdownOpen = false;
-				_dropdownPlaylists = null;
-				panel.Invalidate();
-				return true;
-			}
-
 			var widget = PlaylistWidgetBounds;
 
 			if (_selectedPlaylist != null)
@@ -576,11 +567,11 @@ namespace MusicBeePlugin
 					{
 						if (_trackInSelectedPlaylist)
 						{
-							RemoveCurrentTrackFromSelectedPlaylist();
+							RemoveTrackFromPlaylist(_selectedPlaylist);
 						}
 						else
 						{
-							AddCurrentTrackToSelectedPlaylist();
+							AddTrackToPlaylist(_selectedPlaylist);
 						}
 					}
 					return true;
@@ -589,69 +580,17 @@ namespace MusicBeePlugin
 
 			if (widget.Contains(clickPoint))
 			{
-				// If no playlist selected, open slider panel
-				if (_selectedPlaylist == null)
-				{
-					_playlistSliderOpen = true;
-					_playlistOffset = 0;
-					_visiblePlaylists = null;
-					_ = RefreshVisiblePlaylists();
-					panel.Invalidate();
-					return true;
-				}
-				else
-				{
-					// Otherwise open dropdown (keep existing behavior when playlist is selected)
-					OpenPlaylistDropdown();
-					return true;
-				}
+				// The dropdown is gone - the slider panel is now the only way to browse
+				// and (re)select a playlist, whether or not one is already selected.
+				_playlistSliderOpen = true;
+				_playlistOffset = 0;
+				_visiblePlaylists = null;
+				_ = RefreshVisiblePlaylists();
+				panel.Invalidate();
+				return true;
 			}
 
 			return false;
-		}
-
-		private static List<SimplePlaylist> _dropdownPlaylistsCache = null;
-
-		private async void OpenPlaylistDropdown()
-		{
-			_playlistDropdownOpen = true;
-
-			if (_dropdownPlaylistsCache != null)
-			{
-				// Already fetched this session - serve straight from cache, no round trip.
-				_dropdownPlaylists = _dropdownPlaylistsCache;
-				panel.Invalidate();
-				RefreshPanelUi();
-				return;
-			}
-
-			_dropdownPlaylists = null; // show just "Create Playlist" while this session's first fetch is in flight
-			panel.Invalidate();
-
-			try
-			{
-				var page = await _spotify.Playlists.CurrentUsers().ConfigureAwait(false);
-				var first3 = new List<SimplePlaylist>();
-
-				if (page?.Items != null)
-				{
-					foreach (var pl in page.Items)
-					{
-						first3.Add(pl);
-						if (first3.Count >= 3) break;
-					}
-				}
-
-				_dropdownPlaylistsCache = first3;
-				_dropdownPlaylists = first3;
-			}
-			catch (Exception ex)
-			{
-				mbApiInterface.MB_Trace("OpenPlaylistDropdown (fetch playlists) failed: " + ex.GetType().Name + " - " + ex.Message);
-				_dropdownPlaylists = new List<SimplePlaylist>();
-			}
-
-			RefreshPanelUi();
 		}
 
 		private void SelectPlaylist(SimplePlaylist playlist)
@@ -685,10 +624,8 @@ namespace MusicBeePlugin
 				return;
 			}
 
-			// Force both caches to refetch: the dropdown's playlist list, and
-			// this playlist's track-URI set (in case tracks were added/removed
-			// from elsewhere, e.g. Spotify's own app).
-			_dropdownPlaylistsCache = null;
+			// Force this playlist's track-URI set to refetch (in case tracks were
+			// added/removed from elsewhere, e.g. Spotify's own app).
 			InvalidatePlaylistTrackCache(_selectedPlaylist.Id);
 
 			_playlistMembershipKnown = false;
@@ -712,7 +649,7 @@ namespace MusicBeePlugin
 
 			var myPlaylist = playlist;
 			var myTrackId = _trackID; // capture - a check for the old track finishing late must not overwrite a newer one's state
-			string trackUri = "spotify:track:" + myTrackId;
+			string trackUri = BuildTrackUri(myTrackId);
 
 			bool hasOverride = _localMembershipOverrides.TryGetValue((playlist.Id, trackUri), out bool overriddenState);
 			if (hasOverride)
@@ -830,9 +767,16 @@ namespace MusicBeePlugin
 			return uris;
 		}
 
-		private async void AddCurrentTrackToSelectedPlaylist()
+		/// <summary>
+		/// Adds the current track to the given playlist. Bug fix: this used to be
+		/// AddCurrentTrackToSelectedPlaylist(), which ignored whatever playlist was
+		/// actually clicked in the slider panel and always acted on _selectedPlaylist
+		/// instead (silently doing nothing if nothing had ever been selected via the
+		/// old dropdown). Taking the target playlist explicitly fixes that.
+		/// </summary>
+		private async void AddTrackToPlaylist(SimplePlaylist playlist)
 		{
-			if (_playlistActionInProgress || _selectedPlaylist == null || string.IsNullOrWhiteSpace(_trackID))
+			if (_playlistActionInProgress || playlist == null || string.IsNullOrWhiteSpace(_trackID))
 			{
 				return;
 			}
@@ -840,27 +784,34 @@ namespace MusicBeePlugin
 
 			try
 			{
-				string trackUri = "spotify:track:" + _trackID;
+				string trackUri = BuildTrackUri(_trackID);
 				var request = new PlaylistAddItemsRequest(new List<string> { trackUri });
-				await _spotify.Playlists.AddItems(_selectedPlaylist.Id, request).ConfigureAwait(false);
+				await _spotify.Playlists.AddItems(playlist.Id, request).ConfigureAwait(false);
 
 				// Notify cache manager
-				_cacheManager?.NotifyTrackAdded(_selectedPlaylist.Id, trackUri);
+				_cacheManager?.NotifyTrackAdded(playlist.Id, trackUri);
 
-				_localMembershipOverrides[(_selectedPlaylist.Id, trackUri)] = true;
+				_localMembershipOverrides[(playlist.Id, trackUri)] = true;
 
-				if (_playlistTrackUriCache.TryGetValue(_selectedPlaylist.Id, out var cachedUris))
+				if (_playlistTrackUriCache.TryGetValue(playlist.Id, out var cachedUris))
 				{
 					cachedUris.Add(trackUri);
 				}
 
-				_trackInSelectedPlaylist = true;
-				_playlistMembershipKnown = true;
+				// Only the main-panel quick-action row cares about _selectedPlaylist's
+				// state - update it only when the playlist just modified is the one
+				// currently shown there.
+				if (_selectedPlaylist != null && _selectedPlaylist.Id == playlist.Id)
+				{
+					_trackInSelectedPlaylist = true;
+					_playlistMembershipKnown = true;
+				}
+
 				RefreshPanelUi();
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("AddCurrentTrackToSelectedPlaylist failed: " + ex.GetType().Name + " - " + ex.Message);
+				mbApiInterface.MB_Trace("AddTrackToPlaylist failed: " + ex.GetType().Name + " - " + ex.Message);
 			}
 			finally
 			{
@@ -904,9 +855,14 @@ namespace MusicBeePlugin
 			}
 		}
 
-		private async void RemoveCurrentTrackFromSelectedPlaylist()
+		/// <summary>
+		/// Removes the current track from the given playlist. See AddTrackToPlaylist
+		/// for why this now takes the target playlist explicitly instead of always
+		/// using _selectedPlaylist.
+		/// </summary>
+		private async void RemoveTrackFromPlaylist(SimplePlaylist playlist)
 		{
-			if (_playlistActionInProgress || _selectedPlaylist == null || string.IsNullOrWhiteSpace(_trackID))
+			if (_playlistActionInProgress || playlist == null || string.IsNullOrWhiteSpace(_trackID))
 			{
 				return;
 			}
@@ -914,29 +870,33 @@ namespace MusicBeePlugin
 
 			try
 			{
-				string trackUri = "spotify:track:" + _trackID;
-				bool removed = await RemoveTrackFromPlaylistViaRawApiAsync(_selectedPlaylist.Id, trackUri).ConfigureAwait(false);
+				string trackUri = BuildTrackUri(_trackID);
+				bool removed = await RemoveTrackFromPlaylistViaRawApiAsync(playlist.Id, trackUri).ConfigureAwait(false);
 
 				if (removed)
 				{
 					// Notify cache manager
-					_cacheManager?.NotifyTrackRemoved(_selectedPlaylist.Id, trackUri);
+					_cacheManager?.NotifyTrackRemoved(playlist.Id, trackUri);
 
-					_localMembershipOverrides[(_selectedPlaylist.Id, trackUri)] = false;
+					_localMembershipOverrides[(playlist.Id, trackUri)] = false;
 
-					if (_playlistTrackUriCache.TryGetValue(_selectedPlaylist.Id, out var cachedUris))
+					if (_playlistTrackUriCache.TryGetValue(playlist.Id, out var cachedUris))
 					{
 						cachedUris.Remove(trackUri);
 					}
 
-					_trackInSelectedPlaylist = false;
-					_playlistMembershipKnown = true;
+					if (_selectedPlaylist != null && _selectedPlaylist.Id == playlist.Id)
+					{
+						_trackInSelectedPlaylist = false;
+						_playlistMembershipKnown = true;
+					}
+
 					RefreshPanelUi();
 				}
 			}
 			catch (Exception ex)
 			{
-				mbApiInterface.MB_Trace("RemoveCurrentTrackFromSelectedPlaylist failed: " + ex.GetType().Name + " - " + ex.Message);
+				mbApiInterface.MB_Trace("RemoveTrackFromPlaylist failed: " + ex.GetType().Name + " - " + ex.Message);
 			}
 			finally
 			{
@@ -991,10 +951,16 @@ namespace MusicBeePlugin
 				var request = new PlaylistCreateRequest(name);
 				await _spotify.Playlists.Create(null, request).ConfigureAwait(false);
 
-				_selectedPlaylist = null;
-				_playlistMembershipKnown = false;
+				// The old dropdown's cache invalidation is gone along with the dropdown -
+				// invalidate the slider panel's playlist cache instead, and reset back to
+				// the first page so the new playlist shows up on next fetch.
+				_cacheManager?.InvalidatePlaylistListCache();
+				_playlistOffset = 0;
 
-				_dropdownPlaylistsCache = null;
+				if (_playlistSliderOpen)
+				{
+					_ = RefreshVisiblePlaylists();
+				}
 
 				RefreshPanelUi();
 			}
