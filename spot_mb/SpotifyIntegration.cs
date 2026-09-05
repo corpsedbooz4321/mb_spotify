@@ -27,20 +27,7 @@ namespace MusicBeePlugin
         // ClientIdSetupForm (see PanelInterface.cs), since Spotify's Development
         // Mode allowlist can't scale to a shared app for many users.
         private static string _clientID;
-
-        // Incremented every time a new track-change search is kicked off (see
-        // ReceiveNotification in PanelInterface.cs). TrackSearch() captures the
-        // value that was current when IT was called, and re-checks it after each
-        // await. If a newer search has started in the meantime, this run is stale
-        // and must NOT touch the shared UI fields or repaint - otherwise two
-        // overlapping searches race and whichever happens to finish last wins,
-        // even if it's the one that failed. This is what was causing the panel
-        // to flash the correct track and then immediately show "No Track Found!".
         private static long _searchGeneration = 0;
-
-        // Caches the search result for a given "title artist" query, so replaying a
-        // track (or repeat mode) doesn't hit the network again for something already
-        // looked up this session. Capped to avoid unbounded growth over a long session.
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SearchResponse> _searchCache =
             new System.Collections.Concurrent.ConcurrentDictionary<string, SearchResponse>(StringComparer.OrdinalIgnoreCase);
         private const int MaxSearchCacheEntries = 200;
@@ -48,7 +35,6 @@ namespace MusicBeePlugin
         // Holds the already-downloaded, already-resized artwork for the current track.
         // DrawPanel used to download and decode the image from scratch on every single
         // repaint (window move, focus change, etc.) - this caches it so a repaint is
-        // just a cheap blit of an existing in-memory bitmap instead of a network call.
         private static string _cachedArtworkUrl;
         private static Bitmap _cachedArtwork;
         private static readonly object _artworkLock = new object();
@@ -79,7 +65,7 @@ namespace MusicBeePlugin
             }
             catch (Exception)
             {
-                // Ignore UI refresh failures so the plugin can continue.
+                // Ingore ui refresh failures so the plugin can still run.
             }
         }
 
@@ -89,7 +75,7 @@ namespace MusicBeePlugin
             {
                 if (data == null) return;
 
-                // Serialize directly to JSON
+                // Serialize to json
                 string json = JsonConvert.SerializeObject(data, Newtonsoft.Json.Formatting.Indented);
                 using (StreamWriter file = new StreamWriter(path, false))
                 {
@@ -108,7 +94,7 @@ namespace MusicBeePlugin
             {
                 if (File.Exists(path))
                 {
-                    // Read and deserialize JSON token
+                    // Read and derialiialize json token
                     string json = File.ReadAllText(path);
                     return JsonConvert.DeserializeObject<PKCETokenResponse>(json);
                 }
@@ -126,7 +112,6 @@ namespace MusicBeePlugin
 
             if (string.IsNullOrWhiteSpace(_clientID))
             {
-                // No Client ID configured yet - nothing to authenticate against.
                 // The panel/menu should route the user to Configure() first;
                 // this is just a safety net.
                 return;
@@ -176,7 +161,7 @@ namespace MusicBeePlugin
             }
             catch (Exception)
             {
-                // Fallback to web auth if any startup checks fail
+                // Fallback to web auth if any strat up failure happens
             }
             finally
             {
@@ -188,7 +173,7 @@ namespace MusicBeePlugin
             }
 
             if (_auth == 1) return;
-            //BrowserUtil OAuth flow
+            //browserutil outh flow
             bool browserOpened = false;
             try
             {
@@ -305,12 +290,12 @@ namespace MusicBeePlugin
             }
         }
 
-        // True if `generation` is still the most recent TrackSearch() run. Used to
-        // detect that THIS run has been superseded by a newer track-change search
-        // that started while we were awaiting a network call - in which case we must
-        // not write to the shared _title/_trackID/etc fields or repaint, since doing
-        // so would either clobber a newer (already-correct) result, or send a
-        // library-check request using an ID that no longer matches what's on screen.
+        // True if generation is still the most recent TrackSearch() run Used to
+        // detect that THIS run has been superseded by a newer track change search
+        // that started while we were awaiting a network call in which case we must
+        // not write to the shared _title/_trackID fields or repaint since doing
+        // so would either clobber a newer "already-correct" result or send a
+        // library-check request using an id that no longer matches what is going on with screen.
         private static bool IsCurrentSearch(long generation)
         {
             return Interlocked.Read(ref _searchGeneration) == generation;
