@@ -111,6 +111,7 @@
     <Compile Include="SpotifyIntegration.cs" />
     <Compile Include="ClientIdSetupForm.cs" />
     <Compile Include="Modifyplaylist.cs" />
+    <Compile Include="PlaylistCacheManager.cs" />
   </ItemGroup>
 
   <!-- Project files -->

@@ -147,6 +147,9 @@ namespace MusicBeePlugin
                             .WithAuthenticator(authenticator);
                         _spotify = new SpotifyClient(config);
 
+                        // Initialize cache manager
+                        _cacheManager = new PlaylistCacheManager(_spotify);
+
                         // Verify token validity
                         try
                         {
@@ -225,6 +228,9 @@ namespace MusicBeePlugin
                         var config = SpotifyClientConfig.CreateDefault()
                             .WithAuthenticator(authenticator);
                         _spotify = new SpotifyClient(config);
+
+                        // Initialize cache manager
+                        _cacheManager = new PlaylistCacheManager(_spotify);
 
                         var me = await _spotify.UserProfile.Current();
 

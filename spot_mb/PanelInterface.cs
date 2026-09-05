@@ -146,63 +146,69 @@ namespace MusicBeePlugin
 
             if (_auth == 1 && _trackMissing != 1)
             {
-                DrawPlaylistWidget(e.Graphics);
-
-                TextRenderer.DrawText(e.Graphics, _title, largeBold, new Point(5, 10), text1);
-                TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
-                TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(5, 50), text1);
-
-                // Artwork is downloaded and resized ONCE per track (see LoadArtworkAsync
-                // in SpotifyIntegration.cs, kicked off right after a search succeeds).
-                // DrawPanel fires on every resize/focus-change/etc., so re-downloading
-                // here on every repaint (the old behavior) was a real performance
-                // problem - this is now just a cheap blit of an already-decoded bitmap.
-                // If the download hasn't finished yet (or failed), we simply skip
-                // drawing it this pass; the panel repaints again once it's ready.
-                if (!string.IsNullOrWhiteSpace(_imageURL))
+                // Show either slider panel or main panel
+                if (_playlistSliderOpen)
                 {
-                    var cachedImage = GetCachedArtwork(_imageURL);
-                    if (cachedImage != null)
+                    DrawPlaylistSliderPanel(e.Graphics);
+                }
+                else
+                {
+                    DrawPlaylistWidget(e.Graphics);
+
+                    TextRenderer.DrawText(e.Graphics, _title, largeBold, new Point(5, 10), text1);
+                    TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
+                    TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(5, 50), text1);
+
+                    // Artwork is downloaded and resized ONCE per track (see LoadArtworkAsync
+                    // in SpotifyIntegration.cs, kicked off right after a search succeeds).
+                    // DrawPanel fires on every resize/focus-change/etc., so re-downloading
+                    // here on every repaint (the old behavior) was a real performance
+                    // problem - this is now just a cheap blit of an already-decoded bitmap.
+                    // If the download hasn't finished yet (or failed), we simply skip
+                    // drawing it this pass; the panel repaints again once it's ready.
+                    if (!string.IsNullOrWhiteSpace(_imageURL))
                     {
-                        try
+                        var cachedImage = GetCachedArtwork(_imageURL);
+                        if (cachedImage != null)
                         {
-                            e.Graphics.DrawImage(cachedImage, new Point(10, 80));
-                        }
-                        catch (Exception ex)
-                        {
-                            mbApiInterface.MB_Trace("DrawPanel (artwork) failed: " + ex.GetType().Name + " - " + ex.Message);
+                            try
+                            {
+                                e.Graphics.DrawImage(cachedImage, new Point(10, 80));
+                            }
+                            catch (Exception ex)
+                            {
+                                mbApiInterface.MB_Trace("DrawPanel (artwork) failed: " + ex.GetType().Name + " - " + ex.Message);
+                            }
                         }
                     }
-                }
 
-                if (_trackLIB)
-                {
-                    TextRenderer.DrawText(e.Graphics, "✓ Saved Track", smallBold, new Point(80, 85), text1);
-                }
-                else
-                {
-                    TextRenderer.DrawText(e.Graphics, "♡ Save Track", smallRegular, new Point(80, 85), text1);
-                }
+                    if (_trackLIB)
+                    {
+                        TextRenderer.DrawText(e.Graphics, "✓ Saved Track", smallBold, new Point(80, 85), text1);
+                    }
+                    else
+                    {
+                        TextRenderer.DrawText(e.Graphics, "♡ Save Track", smallRegular, new Point(80, 85), text1);
+                    }
 
-                if (_albumLIB)
-                {
-                    TextRenderer.DrawText(e.Graphics, "✓ Saved Album", smallBold, new Point(80, 105), text1);
-                }
-                else
-                {
-                    TextRenderer.DrawText(e.Graphics, "♡ Save Album", smallRegular, new Point(80, 105), text1);
-                }
+                    if (_albumLIB)
+                    {
+                        TextRenderer.DrawText(e.Graphics, "✓ Saved Album", smallBold, new Point(80, 105), text1);
+                    }
+                    else
+                    {
+                        TextRenderer.DrawText(e.Graphics, "♡ Save Album", smallRegular, new Point(80, 105), text1);
+                    }
 
-                if (_artistLIB)
-                {
-                    TextRenderer.DrawText(e.Graphics, "✓ Following", smallBold, new Point(80, 125), text1);
-                }
-                else
-                {
-                    TextRenderer.DrawText(e.Graphics, "+ Follow Artist", smallRegular, new Point(80, 125), text1);
-                }
-
-
+                    if (_artistLIB)
+                    {
+                        TextRenderer.DrawText(e.Graphics, "✓ Following", smallBold, new Point(80, 125), text1);
+                    }
+                    else
+                    {
+                        TextRenderer.DrawText(e.Graphics, "+ Follow Artist", smallRegular, new Point(80, 125), text1);
+                    }
+                }  // Close else block
             }
             else if (_auth == 1 && _trackMissing == 1)
             {
@@ -320,6 +326,18 @@ namespace MusicBeePlugin
 
 
                 Point clickPoint = panel.PointToClient(Cursor.Position);
+
+                // Handle slider panel clicks if slider is open
+                if (_playlistSliderOpen)
+                {
+                    if (HandlePlaylistSliderClick(clickPoint))
+                    {
+                        panel.Invalidate();
+                        return;
+                    }
+                }
+
+                // Otherwise handle regular widget clicks
                 if (HandlePlaylistWidgetClick(clickPoint))
                 {
                     panel.Invalidate();

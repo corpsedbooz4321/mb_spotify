@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -13,6 +14,15 @@ namespace MusicBeePlugin
 {
 	public partial class Plugin
 	{
+		// === NEW SLIDER PANEL VARIABLES ===
+		private static bool _playlistSliderOpen = false;
+		private static int _playlistOffset = 0;                    // 0, 3, 6, 9... for pagination
+		private static int _totalPlaylistsAvailable = 0;
+		private static bool _loadingMorePlaylists = false;
+		private static List<SimplePlaylist> _visiblePlaylists;     // Currently displayed 3 playlists
+		private PlaylistCacheManager _cacheManager;
+
+		// === OLD DROPDOWN VARIABLES (KEEP FOR NOW) ===
 		private static bool _playlistDropdownOpen = false;
 		private static SimplePlaylist _selectedPlaylist = null;
 		private static bool _trackInSelectedPlaylist = false;
@@ -142,7 +152,8 @@ namespace MusicBeePlugin
 
 			if (_selectedPlaylist == null)
 			{
-				TextRenderer.DrawText(g, "Playlist", smallRegular, widget, fg,
+				// Draw "Select Playlist" button (clickable)
+				TextRenderer.DrawText(g, "Select Playlist", smallRegular, widget, fg,
 					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 			}
 			else
@@ -221,6 +232,299 @@ namespace MusicBeePlugin
 			}
 		}
 
+		// ========== NEW SLIDER PANEL METHODS ==========
+
+		private Rectangle PlaylistSliderBounds
+		{
+			get
+			{
+				// Full panel area minus some margins
+				int margin = 10;
+				return new Rectangle(margin, margin, panel.Width - margin * 2, panel.Height - margin * 2);
+			}
+		}
+
+		private void DrawPlaylistSliderPanel(Graphics g)
+		{
+			var fg = panel.ForeColor;
+			var bounds = PlaylistSliderBounds;
+
+			// Draw background
+			g.FillRectangle(GetBrush(panel.BackColor), bounds);
+			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), bounds);
+
+			// Draw header: Back button | Refresh button
+			DrawSliderBackButton(g, bounds);
+			DrawSliderRefreshButton(g, bounds);
+
+			// Draw playlist cards (3 at a time)
+			if (_visiblePlaylists != null && _visiblePlaylists.Count > 0)
+			{
+				int usableWidth = bounds.Width - 20;  // Left/right margins
+				int cardWidth = usableWidth / 3;
+				int x = bounds.X + 10;
+				int y = bounds.Y + 40;
+
+				foreach (var playlist in _visiblePlaylists)
+				{
+					Rectangle cardBounds = new Rectangle(x, y, cardWidth - 5, 85);
+					DrawPlaylistCard(g, playlist, cardBounds);
+					x += cardWidth;
+				}
+			}
+
+			// Draw pagination buttons
+			DrawPaginationButtons(g, bounds);
+		}
+
+		private void DrawPlaylistCard(Graphics g, SimplePlaylist playlist, Rectangle bounds)
+		{
+			var fg = panel.ForeColor;
+
+			// Draw card background
+			g.DrawRectangle(GetPen(Color.FromArgb(50, fg)), bounds);
+
+			// Draw playlist name (truncated)
+			string name = Truncate(playlist.Name, smallRegular);
+			var nameRect = new Rectangle(bounds.X + 5, bounds.Y + 5, bounds.Width - 10, 18);
+			TextRenderer.DrawText(g, name, smallRegular, nameRect, fg,
+				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+
+			// Draw track count
+			string count = $"{playlist.Tracks?.Total ?? 0} tracks";
+			var countRect = new Rectangle(bounds.X + 5, bounds.Y + 24, bounds.Width - 10, 16);
+			TextRenderer.DrawText(g, count, smallRegular, countRect, fg,
+				TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+			// Draw Add/Remove button
+			bool? membership = _cacheManager?.GetCachedMembership(playlist.Id, _trackID);
+
+			string buttonText = "Loading...";
+			if (membership.HasValue)
+			{
+				buttonText = membership.Value ? "Remove" : "Add";
+			}
+
+			Rectangle buttonBounds = new Rectangle(bounds.X + 5, bounds.Y + 45, bounds.Width - 10, 25);
+			g.DrawRectangle(GetPen(Color.FromArgb(50, fg)), buttonBounds);
+			TextRenderer.DrawText(g, buttonText, smallRegular, buttonBounds, fg,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+		}
+
+		private void DrawSliderBackButton(Graphics g, Rectangle bounds)
+		{
+			var fg = panel.ForeColor;
+			Rectangle backButton = new Rectangle(bounds.X + 5, bounds.Y + 8, 35, 20);
+			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), backButton);
+			TextRenderer.DrawText(g, "← Back", smallRegular, backButton, fg,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+		}
+
+		private void DrawSliderRefreshButton(Graphics g, Rectangle bounds)
+		{
+			var fg = panel.ForeColor;
+			Rectangle refreshButton = new Rectangle(bounds.Right - 40, bounds.Y + 8, 35, 20);
+			g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), refreshButton);
+			TextRenderer.DrawText(g, "↻", smallRegular, refreshButton, fg,
+				TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+		}
+
+		private void DrawPaginationButtons(Graphics g, Rectangle bounds)
+		{
+			var fg = panel.ForeColor;
+			int buttonY = bounds.Bottom - 35;
+
+			// Draw "Back" button if not at offset 0
+			if (_playlistOffset > 0)
+			{
+				Rectangle backPageButton = new Rectangle(bounds.X + 10, buttonY, 50, 25);
+				g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), backPageButton);
+				TextRenderer.DrawText(g, "[Back]", smallRegular, backPageButton, fg,
+					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+			}
+
+			// Draw "Load More" button if more playlists exist
+			if (_totalPlaylistsAvailable > _playlistOffset + 3)
+			{
+				string moreText = _loadingMorePlaylists ? "Loading..." : "[More]";
+				Rectangle moreButton = new Rectangle(bounds.Right - 80, buttonY, 70, 25);
+				var textColor = _loadingMorePlaylists ? Color.FromArgb(90, fg) : fg;
+				g.DrawRectangle(GetPen(Color.FromArgb(60, fg)), moreButton);
+				TextRenderer.DrawText(g, moreText, smallRegular, moreButton, textColor,
+					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+			}
+		}
+
+		private bool HandlePlaylistSliderClick(Point clickPoint)
+		{
+			var sliderBounds = PlaylistSliderBounds;
+
+			// Check Back button (top-left)
+			Rectangle backButton = new Rectangle(sliderBounds.X + 5, sliderBounds.Y + 8, 35, 20);
+			if (backButton.Contains(clickPoint))
+			{
+				_playlistSliderOpen = false;
+				panel.Invalidate();
+				return true;
+			}
+
+			// Check Refresh button (top-right)
+			Rectangle refreshButton = new Rectangle(sliderBounds.Right - 40, sliderBounds.Y + 8, 35, 20);
+			if (refreshButton.Contains(clickPoint))
+			{
+				RefreshAllMemberships();
+				panel.Invalidate();
+				return true;
+			}
+
+			// Check Back pagination button
+			int buttonY = sliderBounds.Bottom - 35;
+			if (_playlistOffset > 0)
+			{
+				Rectangle backPageButton = new Rectangle(sliderBounds.X + 10, buttonY, 50, 25);
+				if (backPageButton.Contains(clickPoint))
+				{
+					_playlistOffset -= 3;
+					if (_playlistOffset < 0) _playlistOffset = 0;
+					_ = RefreshVisiblePlaylists();
+					panel.Invalidate();
+					return true;
+				}
+			}
+
+			// Check More button
+			if (_totalPlaylistsAvailable > _playlistOffset + 3 && !_loadingMorePlaylists)
+			{
+				Rectangle moreButton = new Rectangle(sliderBounds.Right - 80, buttonY, 70, 25);
+				if (moreButton.Contains(clickPoint))
+				{
+					LoadMorePlaylists();
+					return true;
+				}
+			}
+
+			// Check playlist cards
+			if (_visiblePlaylists != null && _visiblePlaylists.Count > 0)
+			{
+				int usableWidth = sliderBounds.Width - 20;
+				int cardWidth = usableWidth / 3;
+				int x = sliderBounds.X + 10;
+				int y = sliderBounds.Y + 40;
+
+				for (int i = 0; i < _visiblePlaylists.Count; i++)
+				{
+					Rectangle cardBounds = new Rectangle(x, y, cardWidth - 5, 85);
+
+					if (cardBounds.Contains(clickPoint))
+					{
+						// Check if click is on button area
+						Rectangle buttonBounds = new Rectangle(cardBounds.X + 5, cardBounds.Y + 45,
+							cardBounds.Width - 10, 25);
+
+						if (buttonBounds.Contains(clickPoint))
+						{
+							// Add/Remove button clicked
+							HandleAddRemoveClick(_visiblePlaylists[i]);
+							return true;
+						}
+						else
+						{
+							// Card clicked - select playlist and return to main
+							SelectPlaylist(_visiblePlaylists[i]);
+							_playlistSliderOpen = false;
+							panel.Invalidate();
+							return true;
+						}
+					}
+
+					x += cardWidth;
+				}
+			}
+
+			return false;
+		}
+
+		private async Task RefreshVisiblePlaylists()
+		{
+			try
+			{
+				_visiblePlaylists = (await _cacheManager.GetPlaylistsAsync(_playlistOffset)).ToList();
+				_totalPlaylistsAvailable = _cacheManager.GetTotalPlaylistsAvailable();
+
+				// Prefetch membership status for each playlist (non-blocking)
+				foreach (var pl in _visiblePlaylists)
+				{
+					_ = PrefetchMembershipAsync(pl.Id, _trackID);
+				}
+
+				RefreshPanelUi();
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace("RefreshVisiblePlaylists failed: " + ex.Message);
+			}
+		}
+
+		private async void LoadMorePlaylists()
+		{
+			if (_loadingMorePlaylists) return;
+
+			_loadingMorePlaylists = true;
+			panel.Invalidate();
+
+			try
+			{
+				_playlistOffset += 3;
+				await RefreshVisiblePlaylists();
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace("LoadMorePlaylists failed: " + ex.Message);
+				_playlistOffset -= 3;
+			}
+			finally
+			{
+				_loadingMorePlaylists = false;
+			}
+		}
+
+		private async Task PrefetchMembershipAsync(string playlistId, string trackId)
+		{
+			try
+			{
+				await _cacheManager.IsTrackInPlaylistAsync(playlistId, trackId);
+				RefreshPanelUi();
+			}
+			catch (Exception ex)
+			{
+				mbApiInterface.MB_Trace("PrefetchMembershipAsync failed: " + ex.Message);
+			}
+		}
+
+		private async void HandleAddRemoveClick(SimplePlaylist playlist)
+		{
+			bool? isMember = await _cacheManager.IsTrackInPlaylistAsync(playlist.Id, _trackID);
+
+			if (isMember ?? false)
+			{
+				RemoveCurrentTrackFromSelectedPlaylist();
+			}
+			else
+			{
+				AddCurrentTrackToSelectedPlaylist();
+			}
+		}
+
+		private void RefreshAllMemberships()
+		{
+			if (_visiblePlaylists == null) return;
+
+			foreach (var pl in _visiblePlaylists)
+			{
+				_ = _cacheManager.RefreshTrackMembershipAsync(pl.Id, _trackID);
+			}
+		}
+
 		private bool HandlePlaylistWidgetClick(Point clickPoint)
 		{
 			if (_playlistDropdownOpen)
@@ -285,8 +589,22 @@ namespace MusicBeePlugin
 
 			if (widget.Contains(clickPoint))
 			{
-				OpenPlaylistDropdown();
-				return true;
+				// If no playlist selected, open slider panel
+				if (_selectedPlaylist == null)
+				{
+					_playlistSliderOpen = true;
+					_playlistOffset = 0;
+					_visiblePlaylists = null;
+					_ = RefreshVisiblePlaylists();
+					panel.Invalidate();
+					return true;
+				}
+				else
+				{
+					// Otherwise open dropdown (keep existing behavior when playlist is selected)
+					OpenPlaylistDropdown();
+					return true;
+				}
 			}
 
 			return false;
@@ -526,6 +844,9 @@ namespace MusicBeePlugin
 				var request = new PlaylistAddItemsRequest(new List<string> { trackUri });
 				await _spotify.Playlists.AddItems(_selectedPlaylist.Id, request).ConfigureAwait(false);
 
+				// Notify cache manager
+				_cacheManager?.NotifyTrackAdded(_selectedPlaylist.Id, trackUri);
+
 				_localMembershipOverrides[(_selectedPlaylist.Id, trackUri)] = true;
 
 				if (_playlistTrackUriCache.TryGetValue(_selectedPlaylist.Id, out var cachedUris))
@@ -598,6 +919,9 @@ namespace MusicBeePlugin
 
 				if (removed)
 				{
+					// Notify cache manager
+					_cacheManager?.NotifyTrackRemoved(_selectedPlaylist.Id, trackUri);
+
 					_localMembershipOverrides[(_selectedPlaylist.Id, trackUri)] = false;
 
 					if (_playlistTrackUriCache.TryGetValue(_selectedPlaylist.Id, out var cachedUris))
