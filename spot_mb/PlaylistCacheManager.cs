@@ -41,6 +41,7 @@ namespace MusicBeePlugin
 			LoadCacheFromDisk();
 		}
 
+		//fidx used semaphore to manage syncronize api refreshes
 		private readonly SemaphoreSlim _refreshlock = new SemaphoreSlim(1, 1);
 		public async Task<List<SimplePlaylist>> GetPlaylistsAsync(int offset)
 		{
@@ -175,14 +176,17 @@ namespace MusicBeePlugin
 		{
 			try
 			{
-				if (File.Exists(_cacheFilePath))
+				lock (_fileLock)
 				{
-					string json = File.ReadAllText(_cacheFilePath);
-					_cache = JsonConvert.DeserializeObject<PlaylistCache>(json) ?? new PlaylistCache();
-				}
-				else
-				{
-					_cache = new PlaylistCache();
+					if (File.Exists(_cacheFilePath))
+					{
+						string json = File.ReadAllText(_cacheFilePath);
+						_cache = JsonConvert.DeserializeObject<PlaylistCache>(json) ?? new PlaylistCache();
+					}
+					else
+					{
+						_cache = new PlaylistCache();
+					}
 				}
 			}
 			catch (Exception ex)
@@ -192,12 +196,16 @@ namespace MusicBeePlugin
 			}
 		}
 
+		private readonly object _fileLock = new object();
 		private void SaveCacheToDisk()
 		{
 			try
 			{
-				string json = JsonConvert.SerializeObject(_cache, Formatting.Indented);
-				File.WriteAllText(_cacheFilePath, json);
+				lock (_fileLock)
+				{
+					string json = JsonConvert.SerializeObject(_cache, Formatting.Indented);
+					File.WriteAllText(_cacheFilePath, json);
+				}
 			}
 			catch (Exception ex)
 			{
