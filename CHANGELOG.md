@@ -4,6 +4,78 @@ All notable changes to `mb_Spotify-Plugin` are documented here.
 
 ## 2026 — Aditya Sharma / Current Maintenance (Continued)
 
+### September 7, 2026 — Cache Concurrency & Diagnostics
+
+**Commits:** `3ee262d`, `fdd5b57`, `7000ceb`
+
+* Improved file locking for playlist-cache operations.
+* Added semaphore-based synchronization for API refresh state.
+* Prevented duplicate API calls during concurrent refresh operations.
+* Fixed the zero-tracks cache case.
+* Added trace logging to diagnose playlist-cache behavior.
+
+---
+
+### September 6, 2026 — Playlist Count Display
+
+**Commit:** `4368802`
+
+* Added the total number of available Spotify playlists to the playlist display.
+* Extended playlist-cache handling to support the new count shown in the UI.
+
+---
+
+### September 5, 2026 — Playlist Panel & Cache Architecture
+
+**Commits:** `da9f58e`, `ff2a64a`, `22853ae`, `e66a394`, `1934b15`
+
+* Added a dedicated playlist cache manager to improve playlist loading performance.
+* Introduced a slider-based playlist panel for browsing playlists.
+* Refactored playlist management to use track URIs.
+* Removed the previous playlist dropdown workflow in favor of the improved panel.
+* Added cached-track counting and playlist-cache invalidation methods.
+* Simplified comments and improved readability in playlist and Spotify integration code.
+
+---
+
+### August 31, 2026 — Playlist Membership & Authentication UI
+
+**Commits:** `27fa7c4`, `a9a090e`
+
+* Improved playlist-membership performance.
+* Fixed stale playlist-membership state after playlist changes.
+* Added a new authentication-page logo and refreshed the authentication-page styling and animation.
+
+---
+
+### August 30, 2026 — Startup & Track Search Null Safety
+
+**Commits:** `c5d3a53`, `8176342`
+
+* Added a null check before issuing track-search requests.
+* Corrected the startup-panel null-check behavior.
+* Closed issue #2 involving track searches triggered before the required data was available.
+
+---
+
+### August 28, 2026 — Plugin Deployment Configuration
+
+**Commits:** `043b4f6`, `c238832`
+
+* Updated the plugin destination folder to use the current user's profile path.
+* Clarified the project comment describing plugin DLL copying.
+
+---
+
+### August 27, 2026 — Notification & Search Cleanup
+
+**Commits:** `8b86412`, `0c4e5aa`
+
+* Removed outdated comments and improved the null check in `TrackSearch`.
+* Simplified notification handling in `ReceiveNotification`.
+
+---
+
 ### August 18, 2026 — Bug Fixes & Refactoring
 
 **Commits:** 
