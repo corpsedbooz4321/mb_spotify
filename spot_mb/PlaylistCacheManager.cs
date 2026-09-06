@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using SpotifyAPI.Web;
@@ -10,54 +12,59 @@ namespace MusicBeePlugin
 {
 	public class PlaylistCacheManager
 	{
-		private SpotifyClient _spotify;
-		private string _cacheDir;
-		private string _cacheFilePath;
+		private readonly SpotifyClient _spotify;
+		private readonly string _cacheFilePath;
 
 		private PlaylistCache _cache;
-		private Dictionary<(string playlistId, string trackUri), (bool isMember, DateTime fetchedAt)> _membershipCache;
+
+		// Thread-safe membership cache
+		private readonly ConcurrentDictionary<(string playlistId, string trackUri), (bool isMember, DateTime fetchedAt)> _membershipCache;
 
 		private const int MembershipCacheTTLMinutes = 5;
 
 		public PlaylistCacheManager(SpotifyClient spotify)
 		{
 			_spotify = spotify;
-			_membershipCache = new Dictionary<(string, string), (bool, DateTime)>();
+			_membershipCache = new ConcurrentDictionary<(string, string), (bool, DateTime)>();
 
-			// Set up AppData cache directory
-			_cacheDir = Path.Combine(
+			string cacheDir = Path.Combine(
 				Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
 				"MusicBee", "Spotify"
 			);
 
-			if (!Directory.Exists(_cacheDir))
+			if (!Directory.Exists(cacheDir))
 			{
-				Directory.CreateDirectory(_cacheDir);
+				Directory.CreateDirectory(cacheDir);
 			}
 
-			_cacheFilePath = Path.Combine(_cacheDir, "playlists_cache.json");
-
-			// Load cache from disk
+			_cacheFilePath = Path.Combine(cacheDir, "playlists_cache.json");
 			LoadCacheFromDisk();
 		}
 
-		/// Get playlists for a specific offset (pagination)
-		/// begs from cache or API as needed
+		private readonly SemaphoreSlim _refreshlock = new SemaphoreSlim(1, 1);
 		public async Task<List<SimplePlaylist>> GetPlaylistsAsync(int offset)
 		{
-			// If cache is stale like older than 1 hour, refresh from api
 			if (_cache == null || DateTime.UtcNow - _cache.LastFetched > TimeSpan.FromHours(1))
 			{
-				await FetchPlaylistsFromAPIAsync();
+				await _refreshlock.WaitAsync();
+				try
+				{
+					if (_cache == null || DateTime.UtcNow - _cache.LastFetched > TimeSpan.FromHours(1))
+					{
+						await FetchPlaylistsFromAPIAsync();
+					}
+				}
+				finally
+				{
+					_refreshlock.Release();
+				}
 			}
 
-			// Return 3 playlists from cache at one itme given given offset
 			if (_cache?.Playlists == null || _cache.Playlists.Count == 0)
 			{
 				return new List<SimplePlaylist>();
 			}
 
-			int endIndex = Math.Min(offset + 3, _cache.Playlists.Count);
 			return _cache.Playlists
 				.Skip(offset)
 				.Take(3)
@@ -69,13 +76,11 @@ namespace MusicBeePlugin
 				.ToList();
 		}
 
-		/// Track count for a playlist, straight from the cache. Kept as a plain int
 		public int GetCachedTrackCount(string playlistId)
 		{
 			return _cache?.Playlists?.FirstOrDefault(p => p.Id == playlistId)?.TotalTracks ?? 0;
 		}
 
-		/// Force the next call to GetPlaylistsAsync to re-beg from the API instead of
 		public void InvalidatePlaylistListCache()
 		{
 			if (_cache != null)
@@ -84,42 +89,32 @@ namespace MusicBeePlugin
 			}
 		}
 
-		/// Get total number of available playlists
 		public int GetTotalPlaylistsAvailable()
 		{
 			return _cache?.TotalAvailable ?? 0;
 		}
 
-		/// Check if a track is in a playlist
-		/// it uses saved cached entries first then it will start begging from api "falls back to api"
 		public async Task<bool?> IsTrackInPlaylistAsync(string playlistId, string trackUri)
 		{
-			// Check memory cache first
 			var cacheKey = (playlistId, trackUri);
+
 			if (_membershipCache.TryGetValue(cacheKey, out var cached))
 			{
-				// If cache is still fresh (< 5 minutes), return it
 				if (DateTime.UtcNow - cached.fetchedAt < TimeSpan.FromMinutes(MembershipCacheTTLMinutes))
 				{
 					return cached.isMember;
 				}
-
-				// Cache expired, remove it
-				_membershipCache.Remove(cacheKey);
+				_membershipCache.TryRemove(cacheKey, out _);
 			}
 
-			// Cache miss or expired - beg from api
-			// an IQ too high?🤡
 			try
 			{
-				var allTracks = await FetchAllPlaylistTracksAsync(playlistId);
-				bool isMember = allTracks.Contains(trackUri);
+				// Early-exit scan: returns as soon as the track is found
+				var (isMember, totalTracks) = await FastCheckTrackInPlaylistAsync(playlistId, trackUri);
 
-				UpdateCachedTrackCount(playlistId, allTracks.Count);
+				UpdateCachedTrackCount(playlistId, totalTracks);
 
-				// Cache the result
 				_membershipCache[cacheKey] = (isMember, DateTime.UtcNow);
-
 				return isMember;
 			}
 			catch (Exception ex)
@@ -129,8 +124,6 @@ namespace MusicBeePlugin
 			}
 		}
 
-		/// Corrects a playlist's cached track count once we've actually walked its
-		/// full track list (which happens as a side effect of any membership check).
 		private void UpdateCachedTrackCount(string playlistId, int actualCount)
 		{
 			var cached = _cache?.Playlists?.FirstOrDefault(p => p.Id == playlistId);
@@ -141,8 +134,6 @@ namespace MusicBeePlugin
 			}
 		}
 
-		/// Get cached membership status without begging from API
-		/// Returns null if not in cache
 		public bool? GetCachedMembership(string playlistId, string trackUri)
 		{
 			var cacheKey = (playlistId, trackUri);
@@ -152,37 +143,27 @@ namespace MusicBeePlugin
 				{
 					return cached.isMember;
 				}
-				_membershipCache.Remove(cacheKey);
+				_membershipCache.TryRemove(cacheKey, out _);
 			}
 			return null;
 		}
 
-		/// User added a track to a playlist - update cache immediately
 		public void NotifyTrackAdded(string playlistId, string trackUri)
 		{
-			var cacheKey = (playlistId, trackUri);
-			_membershipCache[cacheKey] = (true, DateTime.UtcNow);
+			_membershipCache[(playlistId, trackUri)] = (true, DateTime.UtcNow);
 		}
 
-		/// User removed a track from a playlist update cache immediately
 		public void NotifyTrackRemoved(string playlistId, string trackUri)
 		{
-			var cacheKey = (playlistId, trackUri);
-			_membershipCache[cacheKey] = (false, DateTime.UtcNow);
+			_membershipCache[(playlistId, trackUri)] = (false, DateTime.UtcNow);
 		}
 
-		/// Force re-beg membership status from API
 		public async Task<bool?> RefreshTrackMembershipAsync(string playlistId, string trackUri)
 		{
-			// Remove from cache to force API fetch
-			var cacheKey = (playlistId, trackUri);
-			_membershipCache.Remove(cacheKey);
-
-			// Fetch from API
+			_membershipCache.TryRemove((playlistId, trackUri), out _);
 			return await IsTrackInPlaylistAsync(playlistId, trackUri);
 		}
 
-		/// Clear all caches
 		public void ClearCache()
 		{
 			_membershipCache.Clear();
@@ -190,8 +171,6 @@ namespace MusicBeePlugin
 			SaveCacheToDisk();
 		}
 
-		// Private Methods 
-		/// Load playlist cache from AppData
 		private void LoadCacheFromDisk()
 		{
 			try
@@ -199,7 +178,7 @@ namespace MusicBeePlugin
 				if (File.Exists(_cacheFilePath))
 				{
 					string json = File.ReadAllText(_cacheFilePath);
-					_cache = JsonConvert.DeserializeObject<PlaylistCache>(json);
+					_cache = JsonConvert.DeserializeObject<PlaylistCache>(json) ?? new PlaylistCache();
 				}
 				else
 				{
@@ -213,7 +192,6 @@ namespace MusicBeePlugin
 			}
 		}
 
-		/// Save playlist cache to AppData
 		private void SaveCacheToDisk()
 		{
 			try
@@ -227,7 +205,6 @@ namespace MusicBeePlugin
 			}
 		}
 
-		/// Fetch playlists from Spotify API and cache them
 		private async Task FetchPlaylistsFromAPIAsync()
 		{
 			try
@@ -285,48 +262,38 @@ namespace MusicBeePlugin
 			}
 		}
 
-		/// Fetch all track URIs from a playlist
-		private async Task<HashSet<string>> FetchAllPlaylistTracksAsync(string playlistId)
+		private async Task<(bool isMember, int totalTracks)> FastCheckTrackInPlaylistAsync(string playlistId, string targetUri)
 		{
-			var uris = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-			// "Add" (Contains() on an empty set is always false), never "Remove".
 			var request = new PlaylistGetItemsRequest(PlaylistGetItemsRequest.AdditionalTypes.Track)
 			{
 				Limit = 100,
 				Offset = 0
 			};
 
+			int totalTracks = 0;
+
 			while (true)
 			{
-				var page = await _spotify.Playlists.GetItems(playlistId, request);
+				Paging<PlaylistTrack<IPlayableItem>> page = await _spotify.Playlists.GetItems(playlistId, request);
 
-				if (page?.Items != null)
+				if (page?.Items == null)
 				{
-					int itemCount = page.Items.Count;
-					int extractedCount = 0;
+					break;
+				}
 
-					foreach (var entry in page.Items)
-					{
-						var fullTrack = ExtractFullTrack(entry);
-						if (fullTrack?.Uri != null)
-						{
-							uris.Add(fullTrack.Uri);
-							extractedCount++;
-						}
-					}
+				totalTracks = page.Total ?? totalTracks;
 
-					// Cheap tripwirefor  future regression like the fieldfilter bug
-					// upthere shows up immediately in the log instead of silently gooning own its own
-					// producing 0 tracks and always Add again.
-					if (itemCount > 0 && extractedCount == 0)
+				// Corrected property reference: Item instead of Track
+				foreach (var playlistTrack in page.Items)
+				{
+					if (playlistTrack.Item is FullTrack fullTrack &&
+						string.Equals(fullTrack.Uri, targetUri, StringComparison.OrdinalIgnoreCase))
 					{
-						System.Diagnostics.Debug.WriteLine(
-							$"FetchAllPlaylistTracksAsync: playlist {playlistId} returned {itemCount} item(s) but extracted 0 track URIs - ExtractFullTrack may be failing to deserialize items.");
+						return (true, totalTracks);
 					}
 				}
 
-				if (string.IsNullOrEmpty(page?.Next))
+				if (string.IsNullOrEmpty(page.Next))
 				{
 					break;
 				}
@@ -334,24 +301,10 @@ namespace MusicBeePlugin
 				request.Offset = (request.Offset ?? 0) + (request.Limit ?? 100);
 			}
 
-			return uris;
-		}
-
-		/// Extract full track from playlist item
-		private static FullTrack ExtractFullTrack(object entry)
-		{
-			if (entry == null)
-			{
-				return null;
-			}
-
-			var type = entry.GetType();
-			var prop = type.GetProperty("Track") ?? type.GetProperty("Item");
-			return prop?.GetValue(entry) as FullTrack;
+			return (false, totalTracks);
 		}
 	}
 
-	/// Cached playlist metadata
 	public class CachedPlaylist
 	{
 		public string Id { get; set; }
@@ -360,7 +313,6 @@ namespace MusicBeePlugin
 		public DateTime CachedAt { get; set; }
 	}
 
-	/// Root cache structure saved to AppData
 	public class PlaylistCache
 	{
 		public List<CachedPlaylist> Playlists { get; set; } = new List<CachedPlaylist>();
