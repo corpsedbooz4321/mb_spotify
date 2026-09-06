@@ -328,6 +328,21 @@ namespace MusicBeePlugin
 					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
 			}
 
+			// The panel previously gave no indication anywhere of how many playlists
+			// exist in total - only an inferred guess from whether [More] happened to
+			// be showing. Show it plainly instead, e.g. "1-3 of 8".
+			if (_totalPlaylistsAvailable > 0)
+			{
+				int shownCount = _visiblePlaylists?.Count ?? 0;
+				string rangeText = shownCount > 0
+					? $"{_playlistOffset + 1}-{_playlistOffset + shownCount} of {_totalPlaylistsAvailable}"
+					: $"0 of {_totalPlaylistsAvailable}";
+
+				Rectangle rangeRect = new Rectangle(bounds.X + 70, buttonY, bounds.Width - 160, 25);
+				TextRenderer.DrawText(g, rangeText, smallRegular, rangeRect, Color.FromArgb(160, fg),
+					TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+			}
+
 			// Draw "Load More" button if more playlists exist
 			if (_totalPlaylistsAvailable > _playlistOffset + 3)
 			{
