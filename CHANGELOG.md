@@ -2,7 +2,7 @@
 # CHANGELOG
 All notable changes to `mb_Spotify-Plugin` are documented here.
 
-## 2026 — Aditya Sharma / Current Maintenance (Continued)
+# 2026 — Current Maintenance
 
 ### September 7, 2026 — Cache Concurrency & Diagnostics
 
@@ -102,20 +102,20 @@ These changes improved the plugin's performance and user interface by implementi
 
 ---
 
-### August 11, 2026 — MIT Licensing
+### August 11, 2026 — Project Attribution, Stable Working State & Maintenance
 
-- Received permission from original author Zachary Cohen (`zkhcohen`) to continue development and distribute the project under the MIT License.
-- Preserved the original author's attribution and project history.
-- Added the MIT License to the maintained project.
+**Commits:** `97c339b`, `39349d7`, `ef362a8`, `5f39a0a`, `9377d12`, `a99ecad`, `17a8aba`, `2546632`, `166fde1`, `70d9394`, `e0c8559`
 
-## 2026 — Aditya Sharma / Current Maintenance
+This day marked a major stabilization milestone with comprehensive improvements to authentication, search, and project maintenance metadata.
 
-### August 11, 2026 — Stable Working State
+**Project Attribution & Maintenance Metadata (Commit `e0c8559`)**
+* Updated assembly metadata to identify the current maintainer.
+* Preserved attribution to the original author.
+* The project continues to credit **Zachary Cohen (`zkhcohen`)** as the original author while identifying **Aditya Sharma** as the current maintainer/developer.
+* Received permission from original author Zachary Cohen to continue development and distribute under the MIT License.
 
-**Commit:** `97c339b`
-
-The plugin reached a fully working and significantly more robust state after extensive debugging of Spotify authentication, asynchronous requests, track searching, and panel updates.
-
+**Stable Working State (Commit `97c339b`)**
+The plugin reached a fully working and significantly more robust state after extensive debugging. This commit represents the **last fully verified working state before further development**.
 * Improved error handling in `TrackSearch` and `DrawPanel`.
 * Added search-generation control to prevent stale track-search results from overwriting newer results.
 * Prevented stale asynchronous operations from incorrectly updating the MusicBee panel.
@@ -123,50 +123,28 @@ The plugin reached a fully working and significantly more robust state after ext
 * Added safeguards against UI crashes caused by failed asynchronous operations.
 * Stabilized track searching, authentication, artwork retrieval, track details, and library-status checks.
 
-This commit represents the **last fully verified working state before further development**.
-
----
-
-### August 11, 2026 — Thread-Safe Authentication & Search Handling
-
-**Commit:** `39349d7`
-
+**Thread-Safe Authentication & Search Handling (Commit `39349d7`)**
+Addressed a major race condition where multiple simultaneous API requests could independently attempt to refresh an expired Spotify token, resulting in `invalid_grant` errors.
 * Refactored Spotify token-refresh logic in `PKCEAuthenticator`.
 * Added thread-safe handling around token renewal.
 * Prevented multiple simultaneous token-refresh operations.
 * Improved `TrackSearch` handling to prevent stale data from being used.
-* Improved error logging around asynchronous Spotify operations.
 
-This addressed a major race condition where multiple simultaneous API requests could independently attempt to refresh an expired Spotify token, resulting in `invalid_grant` errors caused by reuse of the same authorization/refresh flow.
-
----
-
-### August 11, 2026 — Track Search Safety Improvements
-
-**Commits:** `ef362a8`, `5f39a0a`, `9377d12`
-
+**Track Search Safety & Authentication Improvements (Commits `ef362a8`, `5f39a0a`, `9377d12`)**
 * Fixed index clamping in `TrackSearch` to prevent out-of-bounds errors.
 * Improved track-result selection and validation.
 * Implemented thread-safe token refresh in `AuthorizationCodeAuthenticator`.
 * Added semaphore-based synchronization to prevent concurrent token-refresh requests.
 * Updated documentation surrounding the authentication flow and race-condition fixes.
 
----
-
-### August 11, 2026 — Authentication & UI Reliability
-
-**Commits:** `a99ecad`, `17a8aba`, `2546632`, `166fde1`, `70d9394`
-
-* Improved Spotify authentication flow.
-* Prevented multiple simultaneous authentication attempts.
+**Authentication & UI Reliability (Commits `a99ecad`, `17a8aba`, `2546632`, `166fde1`, `70d9394`)**
+Resolved issues where the plugin could remain visually stuck after authentication even though authentication itself had completed successfully.
+* Improved Spotify authentication flow and prevented multiple simultaneous authentication attempts.
 * Added user feedback for authentication requests and failures.
 * Added immediate panel refresh after successful authentication.
 * Improved UI responsiveness following authentication and track searches.
-* Improved search-term formatting.
-* Improved error handling for authentication failures.
+* Improved search-term formatting and error handling for authentication failures.
 * Updated project configuration for conditional plugin-file copying.
-
-These changes resolved several issues where the plugin could remain visually stuck after authentication even though authentication itself had completed successfully.
 
 ---
 
@@ -219,18 +197,6 @@ The debugging process revealed that MusicBee could trigger multiple asynchronous
 * Updated `.gitignore` for local development and build files.
 
 This marked the beginning of the project's modern continuation after the original repository had been archived.
-
----
-
-### August 11, 2026 — Project Attribution & Maintenance Metadata
-
-**Commit:** `e0c8559`
-
-* Updated assembly metadata to identify the current maintainer.
-* Preserved attribution to the original author.
-* Updated project information to distinguish the original work from current maintenance.
-
-The project continues to credit **Zachary Cohen (`zkhcohen`)** as the original author while identifying **Aditya Sharma** as the current maintainer/developer.
 
 ---
 
