@@ -8,10 +8,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("mb_Spotify_Plugin")]
 [assembly: AssemblyDescription("Spotify integration plugin for MusicBee")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("corpsedbooz4321")]
+[assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("mb_Spotify_Plugin")]
 [assembly: AssemblyCopyright("Copyright © 2021 Zachary Cohen; maintained by corpsedbooz4321")]
-[assembly: AssemblyTrademark("")]
+[assembly: AssemblyTrademark("copsedbooz4321")]
 [assembly: AssemblyCulture("")]
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
