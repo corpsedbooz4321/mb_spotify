@@ -153,8 +153,11 @@ namespace MusicBeePlugin
                     DrawPlaylistWidget(e.Graphics);
 
                     TextRenderer.DrawText(e.Graphics, _title, largeBold, new Point(5, 10), text1);
+
                     TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
+
                     TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(5, 50), text1);
+
 
                     if (!string.IsNullOrWhiteSpace(_imageURL))
                     {
@@ -174,7 +177,7 @@ namespace MusicBeePlugin
 
                     if (_trackLIB)
                     {
-                        TextRenderer.DrawText(e.Graphics, "✓ Saved Track", smallBold, new Point(80, 85), text1);
+                        TextRenderer.DrawText(e.Graphics, "♥︎ Saved Track", smallBold, new Point(80, 85), text1);
                     }
                     else
                     {
@@ -183,7 +186,7 @@ namespace MusicBeePlugin
 
                     if (_albumLIB)
                     {
-                        TextRenderer.DrawText(e.Graphics, "✓ Saved Album", smallBold, new Point(80, 105), text1);
+                        TextRenderer.DrawText(e.Graphics, "♥︎ Saved Album", smallBold, new Point(80, 105), text1);
                     }
                     else
                     {
@@ -192,11 +195,11 @@ namespace MusicBeePlugin
 
                     if (_artistLIB)
                     {
-                        TextRenderer.DrawText(e.Graphics, "✓ Following", smallBold, new Point(80, 125), text1);
+                        TextRenderer.DrawText(e.Graphics, "+ Following", smallBold, new Point(80, 125), text1);
                     }
                     else
                     {
-                        TextRenderer.DrawText(e.Graphics, "+ Follow Artist", smallRegular, new Point(80, 125), text1);
+                        TextRenderer.DrawText(e.Graphics, "᛭ Follow Artist", smallRegular, new Point(80, 125), text1);
                     }
                 }  // Close else block
             }
