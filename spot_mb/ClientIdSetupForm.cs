@@ -5,14 +5,6 @@ using System.Windows.Forms;
 
 namespace MusicBeePlugin
 {
-	/// <summary>
-	/// Lets the user paste in the Client ID from their own Spotify Developer app.
-	/// Spotify's Development Mode apps are capped at a small allowlist of users,
-	/// and extended access is no longer granted to individual/hobbyist developers -
-	/// so instead of shipping one shared app, each user creates their own free app
-	/// and this plugin authenticates against it. Because this uses PKCE (no client
-	/// secret involved), a bare Client ID is safe to store in plain text.
-	/// </summary>
 	public class ClientIdSetupForm : Form
 	{
 		private readonly TextBox _clientIdBox;

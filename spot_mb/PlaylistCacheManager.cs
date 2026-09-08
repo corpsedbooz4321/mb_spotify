@@ -110,7 +110,7 @@ namespace MusicBeePlugin
 
 			try
 			{
-				// Early-exit scan: returns as soon as the track is found
+				// exit scanreturns as soon as the track is found
 				var (isMember, totalTracks) = await FastCheckTrackInPlaylistAsync(playlistId, trackUri);
 
 				UpdateCachedTrackCount(playlistId, totalTracks);
@@ -291,7 +291,7 @@ namespace MusicBeePlugin
 
 				totalTracks = page.Total ?? totalTracks;
 
-				// Corrected property reference: Item instead of Track
+				// Corrected property reference Item instead of Track
 				foreach (var playlistTrack in page.Items)
 				{
 					if (playlistTrack.Item is FullTrack fullTrack &&

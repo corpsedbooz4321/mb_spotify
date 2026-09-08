@@ -135,8 +135,6 @@ namespace MusicBeePlugin
 
             if (_runOnce)
             {
-                // Only auto-attempt login if a Client ID has already been configured -
-                // otherwise wait for the user to click through the setup dialog first.
                 if (!string.IsNullOrWhiteSpace(_clientID) && !_authInProgress)
                 {
                     SpotifyWebAuth();
@@ -146,7 +144,6 @@ namespace MusicBeePlugin
 
             if (_auth == 1 && _trackMissing != 1)
             {
-                // Show either slider panel or main panel
                 if (_playlistSliderOpen)
                 {
                     DrawPlaylistSliderPanel(e.Graphics);
@@ -159,13 +156,6 @@ namespace MusicBeePlugin
                     TextRenderer.DrawText(e.Graphics, _artist, smallRegular, new Point(5, 30), text1);
                     TextRenderer.DrawText(e.Graphics, _album, smallRegular, new Point(5, 50), text1);
 
-                    // Artwork is downloaded and resized ONCE per track (see LoadArtworkAsync
-                    // in SpotifyIntegration.cs, kicked off right after a search succeeds).
-                    // DrawPanel fires on every resize/focus-change/etc., so re-downloading
-                    // here on every repaint (the old behavior) was a real performance
-                    // problem - this is now just a cheap blit of an already-decoded bitmap.
-                    // If the download hasn't finished yet (or failed), we simply skip
-                    // drawing it this pass; the panel repaints again once it's ready.
                     if (!string.IsNullOrWhiteSpace(_imageURL))
                     {
                         var cachedImage = GetCachedArtwork(_imageURL);
@@ -262,12 +252,6 @@ namespace MusicBeePlugin
             panel.Invalidate();
         }
 
-        /// <summary>
-        /// Opens the Client ID setup dialog. Called from the plugin's Configure entry
-        /// point (MusicBee's plugin settings) and from the panel when no Client ID has
-        /// been set yet. Saving a new/changed Client ID clears any existing session,
-        /// since a token issued for a different Spotify app can't be reused.
-        /// </summary>
         public bool Configure(IntPtr panelHandle)
         {
             using (var form = new ClientIdSetupForm(_clientID))
@@ -281,8 +265,6 @@ namespace MusicBeePlugin
                         _clientID = newClientId;
                         SaveClientId(_clientID);
 
-                        // Different app = different credentials required. Drop any
-                        // saved token and force a fresh login against the new app.
                         if (File.Exists(_path))
                         {
                             File.Delete(_path);
@@ -413,14 +395,12 @@ namespace MusicBeePlugin
 
                     _num = 0;
 
-                    // then _searchTerm was updated and searched again - causing a
                     string title = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.TrackTitle);
+
                     string artist = mbApiInterface.NowPlaying_GetFileTag(MetaDataType.Artist);
 
                     if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist))
                     {
-                        // No usable tag data for this track - show "not found" and stop,
-                        // rather than searching with an empty/stale term.
                         _trackMissing = 1;
                         RefreshPanelUi();
                         return;

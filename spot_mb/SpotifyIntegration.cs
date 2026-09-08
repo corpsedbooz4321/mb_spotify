@@ -23,18 +23,12 @@ namespace MusicBeePlugin
         private static int _auth, _num, _trackMissing = 0;
         private static bool _trackLIB, _albumLIB, _artistLIB = false;
         private static string _title, _album, _artist, _trackID, _albumID, _artistID, _imageURL;
-        // No longer hardcoded - each user sets their own Client ID via
-        // ClientIdSetupForm (see PanelInterface.cs), since Spotify's Development
-        // Mode allowlist can't scale to a shared app for many users.
         private static string _clientID;
         private static long _searchGeneration = 0;
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SearchResponse> _searchCache =
             new System.Collections.Concurrent.ConcurrentDictionary<string, SearchResponse>(StringComparer.OrdinalIgnoreCase);
         private const int MaxSearchCacheEntries = 200;
 
-        // Holds the already-downloaded, already-resized artwork for the current track.
-        // DrawPanel used to download and decode the image from scratch on every single
-        // repaint (window move, focus change, etc.) - this caches it so a repaint is
         private static string _cachedArtworkUrl;
         private static Bitmap _cachedArtwork;
         private static readonly object _artworkLock = new object();
@@ -112,8 +106,6 @@ namespace MusicBeePlugin
 
             if (string.IsNullOrWhiteSpace(_clientID))
             {
-                // The panel/menu should route the user to Configure() first;
-                // this is just a safety net.
                 return;
             }
 
@@ -290,23 +282,11 @@ namespace MusicBeePlugin
             }
         }
 
-        // True if generation is still the most recent TrackSearch() run Used to
-        // detect that THIS run has been superseded by a newer track change search
-        // that started while we were awaiting a network call in which case we must
-        // not write to the shared _title/_trackID fields or repaint since doing
-        // so would either clobber a newer "already-correct" result or send a
-        // library-check request using an id that no longer matches what is going on with screen.
         private static bool IsCurrentSearch(long generation)
         {
             return Interlocked.Read(ref _searchGeneration) == generation;
         }
 
-        /// <summary>
-        /// Downloads and pre-resizes artwork once per track, caching the result so
-        /// DrawPanel (a Paint handler, which fires on every resize/focus-change/etc.)
-        /// never has to hit the network or re-decode the image - it just blits
-        /// whatever is currently cached.
-        /// </summary>
         private async Task LoadArtworkAsync(string imageUrl, long generation)
         {
             if (string.IsNullOrWhiteSpace(imageUrl))
@@ -329,8 +309,6 @@ namespace MusicBeePlugin
 
                 if (!IsCurrentSearch(generation))
                 {
-                    // A newer track superseded this one before the download finished -
-                    // discard rather than caching artwork nobody asked for anymore.
                     return;
                 }
 
@@ -357,7 +335,6 @@ namespace MusicBeePlugin
             }
         }
 
-        /// </summary>
         public static Bitmap GetCachedArtwork(string forImageUrl)
         {
             lock (_artworkLock)
@@ -406,8 +383,6 @@ namespace MusicBeePlugin
                     {
                         _searchCache[_searchTerm] = track;
 
-                        // Simple cap so a long listening session doesn't grow this
-                        // unbounded. Not true LRU, just a coarse size limit.
                         if (_searchCache.Count > MaxSearchCacheEntries)
                         {
                             var oldestKey = _searchCache.Keys.FirstOrDefault();
@@ -421,9 +396,6 @@ namespace MusicBeePlugin
 
                 if (!IsCurrentSearch(myGeneration))
                 {
-                    // A newer track-change search started while this search was in
-                    // flight. That newer run owns the shared UI state now - drop
-                    // this stale result instead of racing it.
                     return null;
                 }
 
@@ -438,11 +410,6 @@ namespace MusicBeePlugin
                     return null;
                 }
 
-                // _num can be changed elsewhere (e.g. cycling through match results
-                // for the current track) and is not necessarily valid for THIS track's
-                // result set - a smaller/different result count would otherwise throw
-                // an IndexOutOfRangeException here and get swallowed by the catch below,
-                // silently showing "No Track Found!" even though the search succeeded.
                 if (_num < 0 || _num >= track.Tracks.Items.Count)
                 {
                     _num = 0;
@@ -476,30 +443,12 @@ namespace MusicBeePlugin
                     ? item.Album.Images[0].Url
                     : null;
 
-                // The search succeeded - commit and paint this now, BEFORE attempting
-                // the library-check calls below. A failure in those calls (or this run
-                // getting superseded mid-flight) must never undo a search that already
-                // succeeded. This is the fix for the panel flashing the correct track
-                // and then immediately reverting to "No Track Found!".
                 _trackMissing = 0;
                 _auth = 1;
                 OnPlaylistWidgetTrackChanged();
                 RefreshPanelUi();
 
-                // Fire-and-forget: download and cache the artwork now, once, rather
-                // than letting DrawPanel re-download it on every repaint. Not awaited
-                // so the text/library-check flow below isn't held up by it; it repaints
-                // the panel itself once the image is ready.
                 _ = LoadArtworkAsync(_imageURL, myGeneration);
-
-                // Library-check calls run in their OWN try/catch, decoupled from the
-                // search above. They also re-validate that this run is still current -
-                // both before firing the request (so a superseded run never sends a
-                // check for the wrong track's IDs, which is what was producing the
-                // stray 404s in the log) and before writing the result back (so a
-                // slow response never overwrites a newer track's "Saved in Library"
-                // state).
-
 
                 try
                 {
@@ -512,10 +461,6 @@ namespace MusicBeePlugin
                         new List<string> { _artistID }
                     );
 
-                    // Each check still fails independently (one 403 doesn't zero out
-                    // the other two), but now they run CONCURRENTLY instead of one
-                    // after another - three sequential round-trips became roughly one
-                    // round-trip's worth of latency (the slowest of the three).
                     async Task<bool> SafeCheckTracks()
                     {
                         try { return (await _spotify.Library.CheckTracks(tracks))[0]; }
@@ -598,9 +543,6 @@ namespace MusicBeePlugin
                     _trackLIB = _albumLIB = _artistLIB = false;
                     _auth = 1;
 
-                    // Log the real cause instead of silently swallowing it - this is what
-                    // was making auth failures, rate limits, and indexing bugs all show up
-                    // identically as a silent "No Track Found!" with no way to diagnose it.
                     mbApiInterface.MB_Trace("TrackSearch (search) failed: " + ex.GetType().Name + " - " + ex.Message);
 
                     RefreshPanelUi();
