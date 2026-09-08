@@ -8,9 +8,9 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("mb_Spotify_Plugin")]
 [assembly: AssemblyDescription("Spotify integration plugin for MusicBee")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("Aditya Mahi")]
+[assembly: AssemblyCompany("corpsedbooz4321")]
 [assembly: AssemblyProduct("mb_Spotify_Plugin")]
-[assembly: AssemblyCopyright("Copyright © 2021 Zachary Cohen; maintained by Aditya Mahi")]
+[assembly: AssemblyCopyright("Copyright © 2021 Zachary Cohen; maintained by corpsedbooz4321")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 // Setting ComVisible to false makes the types in this assembly not visible
@@ -31,5 +31,5 @@ using System.Runtime.InteropServices;
 // You can specify all the values or you can default the Build and Revision Numbers
 // by using the '*' as shown below:
 // [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("3.1.0.0")]
-[assembly: AssemblyFileVersion("3.1.0.0")]
+[assembly: AssemblyVersion("3.4.0")]
+[assembly: AssemblyFileVersion("3.4.0")]
