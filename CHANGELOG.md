@@ -2,6 +2,51 @@
 # CHANGELOG
 All notable changes to `mb_Spotify-Plugin` are documented here.
 
+# Releases & Tags
+
+### August 17, 2026 — `v3.2.0`
+
+**Tag:** `v3.2.0`
+**Commit:** `c54de8b`
+
+* Released the single-DLL build with embedded Costura dependencies.
+* Added the inline playlist manager and playlist-management improvements.
+* Added the required Newtonsoft.Json and EmbedIO dependencies.
+
+---
+
+### August 15, 2026 — `v3.1.1`
+
+**Tag:** `v3.1.1`
+**Commit:** `1a44e3c`
+
+* Improved library status indicators for tracks, albums, and followed artists.
+* Added artwork caching and search-result performance improvements.
+* Added playlist management, caching, and related UI improvements.
+
+---
+
+### August 13, 2026 — `v3.0.1`
+
+**Tag:** `v3.0.1`
+**Commit:** `9b666d5`
+
+* First release after the project's reconstruction.
+* Updated the installation and Spotify Developer App setup documentation.
+* Improved login feedback and removed redundant authentication messages.
+
+---
+
+### August 11, 2026 — Stable Pre-Framework Milestone
+
+**Tag:** `spotify-stable-pre-framework`
+**Commit:** `97c339b`
+
+* Marked the last fully verified working state before the framework and dependency updates.
+* Improved track-search and panel error handling, stale-result prevention, authentication, and diagnostic logging.
+
+---
+
 # 2026 — Current Maintenance
 
 ### September 7, 2026 — Cache Concurrency & Diagnostics
