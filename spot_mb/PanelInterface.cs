@@ -195,7 +195,7 @@ namespace MusicBeePlugin
 
                     if (_artistLIB)
                     {
-                        TextRenderer.DrawText(e.Graphics, "+ Following", smallBold, new Point(80, 125), text1);
+                        TextRenderer.DrawText(e.Graphics, "+ Following..", smallBold, new Point(80, 125), text1);
                     }
                     else
                     {
