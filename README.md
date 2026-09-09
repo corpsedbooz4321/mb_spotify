@@ -73,7 +73,7 @@ Because of Spotify's Developer Mode restrictions, each user must have a premium 
 
 ### Technical Highlights
 - **Single-DLL Deployment:** Packaged using Costura.Fody to embed dependencies (e.g., Newtonsoft.Json, EmbedIO) into a single, clean `.dll` file for simple installation.
-- **Cache Concurrency & Synchronization:** Thread-safe playlist cache manager featuring robust file locking, cache invalidation, and SemaphoreSlim synchronization to prevent duplicate API refresh calls.
+- **Cache Concurrency & Synchronization:** Thread-safe playlist caching with in-memory membership tracking, file-level locking, cache invalidation, and SemaphoreSlim-based refresh coordination to prevent duplicate API requests.
 - **Startup & Failure Protection:** Extended null checks and protective bounds handling during slow MusicBee initialization to prevent `NullReferenceException` and UI crashes.
 - **Search-Generation Control:** Prevents delayed asynchronous background searches from overwriting the UI when quickly skipping through tracks.
 - **Diagnostic Logging:** Dedicated trace logging for API requests, cache operations, and authentication state to simplify troubleshooting.
